@@ -141,3 +141,18 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# PWA generated artifacts
+apps/web/dev-dist/
+apps/web/public/sw.js
+apps/web/public/workbox-*.js
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+
+# Claude local settings (project shared go in .claude/settings.json)
+.claude/settings.local.json
