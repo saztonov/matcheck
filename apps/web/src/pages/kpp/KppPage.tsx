@@ -12,6 +12,7 @@ import {
   InputNumber,
   Popconfirm,
   Row,
+  Segmented,
   Space,
   Spin,
   Tag,
@@ -39,6 +40,7 @@ import type { z } from 'zod';
 import { api } from '../../services/api';
 import { capturePhoto } from '../../services/photoPipeline';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
+import { DeliveriesHistory } from './DeliveriesHistory';
 
 type DraftItem = {
   clientKey: string;
@@ -65,8 +67,15 @@ function newKey(): string {
 
 export default function KppPage() {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const deliveryId = params.get('delivery');
+  const tab: 'form' | 'history' =
+    params.get('tab') === 'history' && !deliveryId ? 'history' : 'form';
+  const setTab = (next: 'form' | 'history') => {
+    if (next === 'history') setParams({ tab: 'history' });
+    else if (deliveryId) setParams({ delivery: deliveryId });
+    else setParams({});
+  };
 
   const [items, setItems] = useState<DraftItem[]>([]);
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
@@ -391,11 +400,33 @@ export default function KppPage() {
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: 96 }}>
-      <Typography.Title level={3} style={{ margin: 0 }}>
-        КПП
-      </Typography.Title>
+    <Space
+      direction="vertical"
+      size="middle"
+      style={{ width: '100%', paddingBottom: tab === 'history' ? 0 : 96 }}
+    >
+      <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+        <Typography.Title level={3} style={{ margin: 0 }}>
+          Приёмка
+        </Typography.Title>
+        <Segmented
+          value={tab}
+          onChange={(v) => setTab(v as 'form' | 'history')}
+          options={[
+            { label: 'Форма', value: 'form' },
+            { label: 'История', value: 'history' },
+          ]}
+        />
+      </Space>
 
+      {tab === 'history' ? (
+        <DeliveriesHistory
+          onOpen={(id) => {
+            navigate(`/kpp?delivery=${id}`);
+          }}
+        />
+      ) : (
+        <>
       <Row gutter={[8, 8]}>
         <Col xs={24} sm={12}>
           <Card size="small" title="Госномер" styles={{ body: { padding: 12 } }}>
@@ -613,6 +644,8 @@ export default function KppPage() {
           </span>
         </Tooltip>
       </div>
+        </>
+      )}
     </Space>
   );
 }

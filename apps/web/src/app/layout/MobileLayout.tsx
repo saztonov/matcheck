@@ -8,7 +8,7 @@ import { api } from '../../services/api';
 
 const { Header, Content, Footer } = Layout;
 
-const PRIMARY_KEYS = ['/kpp', '/deliveries', '/documents'];
+const PRIMARY_KEYS = ['/kpp', '/documents'];
 
 export function MobileLayout() {
   const user = useAuthStore((s) => s.user);

@@ -44,7 +44,7 @@ export default function DashboardPage() {
               value={deliveries.data?.total ?? 0}
               loading={deliveries.isLoading}
             />
-            <Link to="/deliveries?status=expected">Перейти →</Link>
+            <Link to="/kpp?tab=history">Перейти →</Link>
           </Card>
         </Col>
         <Col xs={24} sm={12} md={8}>
@@ -59,10 +59,10 @@ export default function DashboardPage() {
         </Col>
         <Col xs={24} sm={12} md={8}>
           <Card>
-            <Typography.Text strong>КПП</Typography.Text>
+            <Typography.Text strong>Приёмка</Typography.Text>
             <div style={{ marginTop: 8 }}>
               <Button type="primary" size="large" block>
-                <Link to="/kpp">Открыть КПП</Link>
+                <Link to="/kpp">Открыть приёмку</Link>
               </Button>
             </div>
           </Card>

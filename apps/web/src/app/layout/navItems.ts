@@ -1,7 +1,5 @@
 import type { ComponentType } from 'react';
 import {
-  AppstoreOutlined,
-  BookOutlined,
   ControlOutlined,
   FileTextOutlined,
   InboxOutlined,
@@ -22,7 +20,7 @@ export type NavItem = {
 export const navItems: NavItem[] = [
   {
     key: 'kpp',
-    label: 'КПП',
+    label: 'Приёмка',
     path: '/kpp',
     roles: ['admin', 'manager', 'inspector_kpp'],
     icon: SafetyOutlined,
@@ -42,25 +40,11 @@ export const navItems: NavItem[] = [
     icon: InboxOutlined,
   },
   {
-    key: 'deliveries',
-    label: 'Приёмки',
-    path: '/deliveries',
-    roles: ['admin', 'manager', 'inspector_kpp'],
-    icon: AppstoreOutlined,
-  },
-  {
     key: 'counterparties',
     label: 'Контрагенты',
     path: '/references/counterparties',
     roles: ['admin', 'manager'],
     icon: TeamOutlined,
-  },
-  {
-    key: 'materials-ref',
-    label: 'Справочник материалов',
-    path: '/references/materials',
-    roles: ['admin', 'manager'],
-    icon: BookOutlined,
   },
   {
     key: 'admin',

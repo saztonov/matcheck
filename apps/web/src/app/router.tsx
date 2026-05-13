@@ -8,8 +8,6 @@ import AdminLayout from '../pages/admin/AdminLayout';
 const Login = lazy(() => import('../pages/auth/Login'));
 const Register = lazy(() => import('../pages/auth/Register'));
 const Inbox = lazy(() => import('../pages/inbox/Inbox'));
-const DeliveriesList = lazy(() => import('../pages/deliveries/DeliveriesList'));
-const DeliveryDetail = lazy(() => import('../pages/deliveries/DeliveryDetail'));
 const KppPage = lazy(() => import('../pages/kpp/KppPage'));
 const Counterparties = lazy(() => import('../pages/references/Counterparties'));
 const Materials = lazy(() => import('../pages/references/Materials'));
@@ -55,8 +53,6 @@ export const router = createBrowserRouter([
       },
       { path: 'inbox', element: <Navigate to="/documents" replace /> },
       { path: 'materials', element: suspense(<MaterialsJournal />) },
-      { path: 'deliveries', element: suspense(<DeliveriesList />) },
-      { path: 'deliveries/:id', element: suspense(<DeliveryDetail />) },
       {
         path: 'references/counterparties',
         element: (
