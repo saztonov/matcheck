@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { and, desc, eq, ilike, sql as drSql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -107,6 +108,25 @@ function sdRow(sd: typeof sourceDocuments.$inferSelect) {
   };
 }
 
+async function findOriginalAttachment(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  app: any,
+  sourceDocumentId: string,
+) {
+  const [att] = await app.db
+    .select()
+    .from(sourceDocumentAttachments)
+    .where(
+      and(
+        eq(sourceDocumentAttachments.sourceDocumentId, sourceDocumentId),
+        eq(sourceDocumentAttachments.role, 'original'),
+      ),
+    )
+    .orderBy(desc(sourceDocumentAttachments.createdAt))
+    .limit(1);
+  return att ?? null;
+}
+
 export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<void> {
   const app = asZod(rawApp);
   app.get(
@@ -206,17 +226,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       },
     },
     async (req, reply) => {
-      const [att] = await app.db
-        .select()
-        .from(sourceDocumentAttachments)
-        .where(
-          and(
-            eq(sourceDocumentAttachments.sourceDocumentId, req.params.id),
-            eq(sourceDocumentAttachments.role, 'original'),
-          ),
-        )
-        .orderBy(desc(sourceDocumentAttachments.createdAt))
-        .limit(1);
+      const att = await findOriginalAttachment(app, req.params.id);
       if (!att) return reply.code(404).send({ error: 'no_attachment' });
       try {
         const url = await presign({ method: 'GET', key: att.s3Key, expiresIn: 3600 });
@@ -225,6 +235,70 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
         req.log.warn({ err, key: att.s3Key }, 'presign failed');
         return reply.code(404).send({ error: 'presign_failed' });
       }
+    },
+  );
+
+  // Стрим оригинала через бэкенд — same-origin для CSP `frame-src 'self' blob:`.
+  // Браузер вызывает этот URL из <iframe>; presigned URL на S3 не покидает сервер.
+  app.get(
+    '/api/v1/source-documents/:id/file/raw',
+    {
+      preHandler: [app.authenticate],
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req, reply) => {
+      const att = await findOriginalAttachment(app, req.params.id);
+      if (!att) return reply.code(404).send({ error: 'no_attachment' });
+
+      let signedUrl: string;
+      try {
+        signedUrl = await presign({ method: 'GET', key: att.s3Key, expiresIn: 60 });
+      } catch (err) {
+        req.log.warn({ err, key: att.s3Key }, 'presign failed (raw)');
+        return reply.code(404).send({ error: 'presign_failed' });
+      }
+
+      const upstreamHeaders: Record<string, string> = {};
+      const range = req.headers.range;
+      if (typeof range === 'string') upstreamHeaders.range = range;
+      const inm = req.headers['if-none-match'];
+      if (typeof inm === 'string') upstreamHeaders['if-none-match'] = inm;
+      const ims = req.headers['if-modified-since'];
+      if (typeof ims === 'string') upstreamHeaders['if-modified-since'] = ims;
+
+      let upstream: Response;
+      try {
+        upstream = await fetch(signedUrl, { headers: upstreamHeaders });
+      } catch (err) {
+        req.log.warn({ err, key: att.s3Key }, 'S3 fetch failed');
+        return reply.code(502).send({ error: 's3_unavailable' });
+      }
+
+      const ok = upstream.ok || upstream.status === 206 || upstream.status === 304;
+      if (!ok) {
+        req.log.warn(
+          { status: upstream.status, key: att.s3Key },
+          'S3 returned non-OK for raw fetch',
+        );
+        return reply.code(502).send({ error: 's3_unavailable' });
+      }
+
+      reply.code(upstream.status);
+      for (const h of ['content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        const v = upstream.headers.get(h);
+        if (v) reply.header(h, v);
+      }
+      reply.header('content-type', att.mimeType);
+      reply.header(
+        'content-disposition',
+        `inline; filename*=UTF-8''${encodeURIComponent(att.filename)}`,
+      );
+      reply.header('cache-control', 'private, max-age=300');
+
+      if (upstream.status === 304 || !upstream.body) {
+        return reply.send();
+      }
+      return reply.send(Readable.fromWeb(upstream.body as never));
     },
   );
 

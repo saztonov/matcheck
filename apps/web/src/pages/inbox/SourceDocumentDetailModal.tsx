@@ -114,7 +114,7 @@ export function SourceDocumentDetailModal({
                 <Spin />
               ) : file.data ? (
                 <iframe
-                  src={file.data.url}
+                  src={`/api/v1/source-documents/${id}/file/raw`}
                   title="Оригинал документа"
                   style={{ width: '100%', height: '75vh', border: '1px solid #f0f0f0' }}
                 />
