@@ -8,9 +8,8 @@ export type NavItem = {
 };
 
 export const navItems: NavItem[] = [
-  { key: 'dashboard', label: 'Сводка', path: '/', roles: ['admin', 'manager', 'inspector_kpp'] },
   { key: 'kpp', label: 'КПП', path: '/kpp', roles: ['admin', 'manager', 'inspector_kpp'] },
-  { key: 'inbox', label: 'Входящие', path: '/inbox', roles: ['admin', 'manager'] },
+  { key: 'documents', label: 'Документы', path: '/documents', roles: ['admin', 'manager'] },
   {
     key: 'deliveries',
     label: 'Приёмки',
@@ -29,15 +28,12 @@ export const navItems: NavItem[] = [
     path: '/references/materials',
     roles: ['admin', 'manager'],
   },
-  { key: 'admin-users', label: 'Пользователи', path: '/admin/users', roles: ['admin'] },
-  { key: 'admin-llm', label: 'LLM провайдеры', path: '/admin/llm-providers', roles: ['admin'] },
-  { key: 'admin-edo', label: 'ЭДО', path: '/admin/edo-accounts', roles: ['admin'] },
-  { key: 'admin-mail', label: 'Почта', path: '/admin/mail-accounts', roles: ['admin'] },
+  { key: 'admin', label: 'Администрирование', path: '/admin', roles: ['admin'] },
   {
     key: 'settings',
     label: 'Настройки',
     path: '/settings',
-    roles: ['admin', 'manager', 'inspector_kpp'],
+    roles: ['manager', 'inspector_kpp'],
   },
 ];
 

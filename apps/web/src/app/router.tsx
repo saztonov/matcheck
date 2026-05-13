@@ -3,10 +3,10 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { Spin } from 'antd';
 import { AppShell } from './layout/AppShell';
 import { ProtectedRoute } from '../shared/ui/ProtectedRoute';
+import AdminLayout from '../pages/admin/AdminLayout';
 
 const Login = lazy(() => import('../pages/auth/Login'));
 const Register = lazy(() => import('../pages/auth/Register'));
-const Dashboard = lazy(() => import('../pages/dashboard/Dashboard'));
 const Inbox = lazy(() => import('../pages/inbox/Inbox'));
 const DeliveriesList = lazy(() => import('../pages/deliveries/DeliveriesList'));
 const DeliveryDetail = lazy(() => import('../pages/deliveries/DeliveryDetail'));
@@ -44,14 +44,15 @@ export const router = createBrowserRouter([
       </ProtectedRoute>
     ),
     children: [
-      { index: true, element: suspense(<Dashboard />) },
+      { index: true, element: <Navigate to="/kpp" replace /> },
       { path: 'kpp', element: suspense(<KppPage />) },
       {
-        path: 'inbox',
+        path: 'documents',
         element: (
           <ProtectedRoute roles={['admin', 'manager']}>{suspense(<Inbox />)}</ProtectedRoute>
         ),
       },
+      { path: 'inbox', element: <Navigate to="/documents" replace /> },
       { path: 'deliveries', element: suspense(<DeliveriesList />) },
       { path: 'deliveries/:id', element: suspense(<DeliveryDetail />) },
       {
@@ -69,26 +70,20 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: 'admin/users',
-        element: <ProtectedRoute roles={['admin']}>{suspense(<AdminUsers />)}</ProtectedRoute>,
-      },
-      {
-        path: 'admin/llm-providers',
+        path: 'admin',
         element: (
-          <ProtectedRoute roles={['admin']}>{suspense(<AdminLlmProviders />)}</ProtectedRoute>
+          <ProtectedRoute roles={['admin']}>
+            <AdminLayout />
+          </ProtectedRoute>
         ),
-      },
-      {
-        path: 'admin/edo-accounts',
-        element: (
-          <ProtectedRoute roles={['admin']}>{suspense(<AdminEdoAccounts />)}</ProtectedRoute>
-        ),
-      },
-      {
-        path: 'admin/mail-accounts',
-        element: (
-          <ProtectedRoute roles={['admin']}>{suspense(<AdminMailAccounts />)}</ProtectedRoute>
-        ),
+        children: [
+          { index: true, element: <Navigate to="/admin/users" replace /> },
+          { path: 'users', element: suspense(<AdminUsers />) },
+          { path: 'llm-providers', element: suspense(<AdminLlmProviders />) },
+          { path: 'edo-accounts', element: suspense(<AdminEdoAccounts />) },
+          { path: 'mail-accounts', element: suspense(<AdminMailAccounts />) },
+          { path: 'settings', element: suspense(<Settings />) },
+        ],
       },
       { path: 'settings', element: suspense(<Settings />) },
       { path: '*', element: <Navigate to="/" replace /> },

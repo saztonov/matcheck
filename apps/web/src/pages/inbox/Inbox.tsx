@@ -46,7 +46,7 @@ export default function InboxPage() {
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
         <Typography.Title level={3} style={{ margin: 0 }}>
-          Входящие
+          Документы
         </Typography.Title>
         <Segmented
           value={kind}
