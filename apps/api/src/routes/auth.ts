@@ -25,6 +25,7 @@ import {
 } from '../domain/auth/refresh.js';
 import { sha256Hex } from '../domain/auth/crypto.js';
 import { loadEnv } from '../lib/env.js';
+import { createBurstyRateLimit } from '../lib/auth-rate-limit.js';
 
 const env = loadEnv();
 
@@ -55,13 +56,20 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
   app.post(
     '/api/v1/auth/register',
     {
-      config: { rateLimit: { max: 3, timeWindow: '1 hour' } },
+      preHandler: createBurstyRateLimit({
+        burst: 5,
+        burstWindowSec: 900,
+        slowWindowSec: 60,
+        keyPrefix: 'register',
+        noun: 'регистрации',
+      }),
       schema: {
         body: RegisterRequestSchema,
         response: {
           200: RegisterResponseSchema,
           400: ErrorResponseSchema,
           409: ErrorResponseSchema,
+          429: ErrorResponseSchema,
         },
       },
     },
@@ -102,10 +110,21 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
   app.post(
     '/api/v1/auth/login',
     {
-      config: { rateLimit: { max: 5, timeWindow: '15 minutes' } },
+      preHandler: createBurstyRateLimit({
+        burst: 5,
+        burstWindowSec: 900,
+        slowWindowSec: 60,
+        keyPrefix: 'login',
+        noun: 'входа',
+      }),
       schema: {
         body: LoginRequestSchema,
-        response: { 200: LoginResponseSchema, 401: ErrorResponseSchema, 423: ErrorResponseSchema },
+        response: {
+          200: LoginResponseSchema,
+          401: ErrorResponseSchema,
+          423: ErrorResponseSchema,
+          429: ErrorResponseSchema,
+        },
       },
     },
     async (req, reply) => {

@@ -11,6 +11,7 @@ export function ResponsiveTable<T extends object>({
   cardRender,
   loading,
   emptyText,
+  onRowClick,
 }: {
   items: T[];
   columns: Column<T>[];
@@ -18,6 +19,7 @@ export function ResponsiveTable<T extends object>({
   cardRender: (row: T) => ReactNode;
   loading?: boolean;
   emptyText?: string;
+  onRowClick?: (row: T) => void;
 }) {
   const bp = useBreakpoint();
   if (bp === 'desktop') {
@@ -30,6 +32,14 @@ export function ResponsiveTable<T extends object>({
         size="middle"
         pagination={{ pageSize: 50, showSizeChanger: true }}
         locale={{ emptyText: emptyText ?? 'Нет данных' }}
+        onRow={
+          onRowClick
+            ? (row) => ({
+                onClick: () => onRowClick(row),
+                style: { cursor: 'pointer' },
+              })
+            : undefined
+        }
       />
     );
   }
@@ -39,7 +49,11 @@ export function ResponsiveTable<T extends object>({
       loading={loading}
       locale={{ emptyText: emptyText ?? 'Нет данных' }}
       renderItem={(item) => (
-        <List.Item key={typeof rowKey === 'function' ? rowKey(item) : String(item[rowKey])}>
+        <List.Item
+          key={typeof rowKey === 'function' ? rowKey(item) : String(item[rowKey])}
+          onClick={onRowClick ? () => onRowClick(item) : undefined}
+          style={onRowClick ? { cursor: 'pointer' } : undefined}
+        >
           {cardRender(item)}
         </List.Item>
       )}

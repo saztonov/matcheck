@@ -1,17 +1,34 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, ilike, or, sql as drSql } from 'drizzle-orm';
+import { and, desc, eq, ilike, or, sql as drSql } from 'drizzle-orm';
 import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import {
+  MaterialJournalResponseSchema,
   MaterialListResponseSchema,
   MaterialSchema,
   MaterialUpsertSchema,
   ErrorResponseSchema,
 } from '@matcheck/contracts';
-import { materials } from '../db/schema.js';
+import {
+  counterparties,
+  deliveries,
+  deliveryItems,
+  deliverySources,
+  materials,
+  sourceDocuments,
+} from '../db/schema.js';
 
 const ListQuerySchema = z.object({
   q: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(200).default(50),
+  offset: z.coerce.number().int().nonnegative().default(0),
+});
+
+const JournalQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200).optional(),
+  supplierId: z.string().uuid().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
 });
@@ -29,6 +46,91 @@ function row(m: typeof materials.$inferSelect) {
 
 export async function materialRoutes(rawApp: FastifyInstance): Promise<void> {
   const app = asZod(rawApp);
+
+  app.get(
+    '/api/v1/materials/journal',
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        querystring: JournalQuerySchema,
+        response: { 200: MaterialJournalResponseSchema },
+      },
+    },
+    async (req) => {
+      const { q, supplierId, from, to, limit, offset } = req.query;
+      const conditions = [eq(deliveries.status, 'verified')];
+      if (q) {
+        conditions.push(
+          or(
+            ilike(deliveryItems.nameRaw, `%${q}%`),
+            ilike(materials.name, `%${q}%`),
+          )!,
+        );
+      }
+      if (supplierId) conditions.push(eq(sourceDocuments.supplierId, supplierId));
+      if (from) conditions.push(drSql`${deliveries.arrivedAt} >= ${new Date(from)}`);
+      if (to) conditions.push(drSql`${deliveries.arrivedAt} <= ${new Date(to)}`);
+
+      const where = and(...conditions);
+
+      const rows = await app.db
+        .select({
+          itemId: deliveryItems.id,
+          deliveryId: deliveries.id,
+          materialId: deliveryItems.materialId,
+          materialName: materials.name,
+          nameRaw: deliveryItems.nameRaw,
+          unit: deliveryItems.unit,
+          qtyPlanned: deliveryItems.qtyPlanned,
+          qtyActual: deliveryItems.qtyActual,
+          arrivedAt: deliveries.arrivedAt,
+          supplierId: counterparties.id,
+          supplierName: counterparties.name,
+          sourceDocumentId: sourceDocuments.id,
+          docNumber: sourceDocuments.docNumber,
+          docDate: sourceDocuments.docDate,
+        })
+        .from(deliveryItems)
+        .innerJoin(deliveries, eq(deliveries.id, deliveryItems.deliveryId))
+        .leftJoin(materials, eq(materials.id, deliveryItems.materialId))
+        .leftJoin(deliverySources, eq(deliverySources.deliveryId, deliveries.id))
+        .leftJoin(sourceDocuments, eq(sourceDocuments.id, deliverySources.sourceDocumentId))
+        .leftJoin(counterparties, eq(counterparties.id, sourceDocuments.supplierId))
+        .where(where)
+        .orderBy(desc(deliveries.arrivedAt))
+        .limit(limit)
+        .offset(offset);
+
+      const [{ count } = { count: 0 }] = await app.db
+        .select({ count: drSql<number>`count(*)::int` })
+        .from(deliveryItems)
+        .innerJoin(deliveries, eq(deliveries.id, deliveryItems.deliveryId))
+        .leftJoin(materials, eq(materials.id, deliveryItems.materialId))
+        .leftJoin(deliverySources, eq(deliverySources.deliveryId, deliveries.id))
+        .leftJoin(sourceDocuments, eq(sourceDocuments.id, deliverySources.sourceDocumentId))
+        .leftJoin(counterparties, eq(counterparties.id, sourceDocuments.supplierId))
+        .where(where);
+
+      return {
+        items: rows.map((r) => ({
+          id: `${r.itemId}:${r.sourceDocumentId ?? 'none'}`,
+          deliveryId: r.deliveryId,
+          materialId: r.materialId,
+          materialName: r.materialName ?? r.nameRaw,
+          unit: r.unit,
+          qty: r.qtyActual ?? r.qtyPlanned ?? '0',
+          supplierId: r.supplierId,
+          supplierName: r.supplierName,
+          sourceDocumentId: r.sourceDocumentId,
+          docNumber: r.docNumber,
+          docDate: r.docDate ? r.docDate.toISOString().slice(0, 10) : null,
+          arrivedAt: r.arrivedAt ? r.arrivedAt.toISOString() : null,
+        })),
+        total: count,
+      };
+    },
+  );
+
   app.get(
     '/api/v1/materials',
     {

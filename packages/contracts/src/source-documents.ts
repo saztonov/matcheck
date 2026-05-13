@@ -113,3 +113,10 @@ export const UpdPdfConfirmRequestSchema = z.object({
   parsed: UpdPdfParsedSchema,
 });
 export type UpdPdfConfirmRequest = z.infer<typeof UpdPdfConfirmRequestSchema>;
+
+export const SourceDocumentFileResponseSchema = z.object({
+  url: z.string().url(),
+  filename: z.string(),
+  mimeType: z.string().nullable(),
+});
+export type SourceDocumentFileResponse = z.infer<typeof SourceDocumentFileResponseSchema>;

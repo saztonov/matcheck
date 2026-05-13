@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  AutoComplete,
   Button,
   Card,
   Form,
@@ -14,8 +15,15 @@ import {
 } from 'antd';
 import type { UploadProps } from 'antd';
 import { CameraOutlined, SaveOutlined } from '@ant-design/icons';
-import { useMutation } from '@tanstack/react-query';
-import type { Delivery, DeliveryUpsert } from '@matcheck/contracts';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import type {
+  Delivery,
+  DeliveryUpsert,
+  SourceDocument,
+  SourceDocumentDetail,
+  SourceDocumentListResponseSchema,
+} from '@matcheck/contracts';
+import type { z } from 'zod';
 import { api } from '../../services/api';
 import { capturePhoto } from '../../services/photoPipeline';
 
@@ -25,26 +33,57 @@ type DraftItem = {
   qtyPlanned: string | null;
   qtyActual: string | null;
   unit: string;
+  materialId: string | null;
 };
 
+type SourceList = z.infer<typeof SourceDocumentListResponseSchema>;
+
 export default function KppPage() {
-  const [items, setItems] = useState<DraftItem[]>([
-    { lineNo: 1, nameRaw: '', qtyPlanned: null, qtyActual: null, unit: 'шт' },
-  ]);
+  const [items, setItems] = useState<DraftItem[]>([]);
   const [plate, setPlate] = useState('');
-  const [driver, setDriver] = useState('');
   const [comment, setComment] = useState('');
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [updQuery, setUpdQuery] = useState('');
+  const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
+
+  const updSuggestions = useQuery({
+    queryKey: ['source-documents', 'unaccepted-upd', updQuery],
+    queryFn: () =>
+      api.get<SourceList>(
+        `/source-documents?kind=upd&unaccepted=true${
+          updQuery ? `&q=${encodeURIComponent(updQuery)}` : ''
+        }&limit=20`,
+      ),
+    enabled: !savedId,
+  });
+
+  const loadDetail = useMutation({
+    mutationFn: (id: string) => api.get<SourceDocumentDetail>(`/source-documents/${id}`),
+    onSuccess: (detail) => {
+      setSelectedUpd(detail);
+      setItems(
+        detail.items.map((it, idx) => ({
+          lineNo: idx + 1,
+          nameRaw: it.nameRaw,
+          qtyPlanned: it.qty,
+          qtyActual: it.qty,
+          unit: it.unit,
+          materialId: it.materialId,
+        })),
+      );
+    },
+    onError: (err: Error) => message.error(`Не удалось загрузить УПД: ${err.message}`),
+  });
 
   const save = useMutation({
     mutationFn: async () => {
       const payload: DeliveryUpsert = {
         status: 'verified',
+        supplierId: selectedUpd?.supplierId ?? null,
         vehiclePlate: plate || null,
-        driverName: driver || null,
         arrivedAt: new Date().toISOString(),
         comment: comment || null,
-        sourceDocumentIds: [],
+        sourceDocumentIds: selectedUpd ? [selectedUpd.id] : [],
         items: items
           .filter((i) => i.nameRaw.trim().length > 0)
           .map((i) => ({
@@ -53,6 +92,7 @@ export default function KppPage() {
             qtyPlanned: i.qtyPlanned,
             qtyActual: i.qtyActual,
             unit: i.unit,
+            materialId: i.materialId,
           })),
       };
       return api.post<Delivery>('/deliveries', payload);
@@ -89,9 +129,27 @@ export default function KppPage() {
   const addItem = () => {
     setItems((prev) => [
       ...prev,
-      { lineNo: prev.length + 1, nameRaw: '', qtyPlanned: null, qtyActual: null, unit: 'шт' },
+      {
+        lineNo: prev.length + 1,
+        nameRaw: '',
+        qtyPlanned: null,
+        qtyActual: null,
+        unit: 'шт',
+        materialId: null,
+      },
     ]);
   };
+
+  const removeItem = (idx: number) => {
+    setItems((prev) => prev.filter((_, i) => i !== idx).map((it, i) => ({ ...it, lineNo: i + 1 })));
+  };
+
+  const updOptions = (updSuggestions.data?.items ?? []).map((sd) => ({
+    value: sd.id,
+    label: `${sd.docNumber ?? '— без номера —'}${sd.docDate ? ` от ${sd.docDate}` : ''}${
+      sd.totalSum ? ` · ${sd.totalSum} ₽` : ''
+    }`,
+  }));
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: 96 }}>
@@ -109,13 +167,45 @@ export default function KppPage() {
               style={{ fontSize: 18 }}
             />
           </Form.Item>
-          <Form.Item label="Водитель">
-            <Input size="large" value={driver} onChange={(e) => setDriver(e.target.value)} />
-          </Form.Item>
         </Form>
       </Card>
+      <Card title="УПД" size="small">
+        {selectedUpd ? (
+          <Space wrap>
+            <Tag color="blue">{selectedUpd.docNumber ?? '— без номера —'}</Tag>
+            <Typography.Text type="secondary">
+              {selectedUpd.docDate ?? '—'} · {selectedUpd.totalSum ?? '—'} ₽
+            </Typography.Text>
+            <Button
+              size="small"
+              onClick={() => {
+                setSelectedUpd(null);
+                setItems([]);
+              }}
+              disabled={!!savedId}
+            >
+              Сменить
+            </Button>
+          </Space>
+        ) : (
+          <AutoComplete
+            size="large"
+            style={{ width: '100%' }}
+            placeholder="Введите номер УПД для поиска"
+            value={updQuery}
+            onChange={(v) => setUpdQuery(v)}
+            onSelect={(value) => {
+              loadDetail.mutate(value);
+              setUpdQuery('');
+            }}
+            options={updOptions}
+            notFoundContent={updSuggestions.isLoading ? 'Поиск…' : 'Ничего не найдено'}
+            filterOption={false}
+          />
+        )}
+      </Card>
       <Card
-        title="Позиции"
+        title={`Позиции${items.length ? ` (${items.length})` : ''}`}
         size="small"
         extra={
           <Button size="large" onClick={addItem}>
@@ -123,9 +213,24 @@ export default function KppPage() {
           </Button>
         }
       >
+        {items.length === 0 && (
+          <Typography.Text type="secondary">
+            Выберите УПД выше — позиции подтянутся автоматически. Или добавьте строки вручную.
+          </Typography.Text>
+        )}
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
           {items.map((it, idx) => (
-            <Card key={idx} size="small" type="inner" title={`№ ${it.lineNo}`}>
+            <Card
+              key={idx}
+              size="small"
+              type="inner"
+              title={`№ ${it.lineNo}`}
+              extra={
+                <Button size="small" danger onClick={() => removeItem(idx)}>
+                  ×
+                </Button>
+              }
+            >
               <Space direction="vertical" style={{ width: '100%' }}>
                 <Input
                   size="large"
@@ -141,6 +246,7 @@ export default function KppPage() {
                     style={{ width: 120 }}
                     value={it.qtyPlanned !== null ? Number(it.qtyPlanned) : null}
                     onChange={(v) => updateItem(idx, { qtyPlanned: v !== null ? String(v) : null })}
+                    disabled={!!it.materialId}
                   />
                   <span>Факт:</span>
                   <InputNumber
@@ -196,10 +302,10 @@ export default function KppPage() {
           block
           loading={save.isPending}
           onClick={() => save.mutate()}
-          disabled={!plate || items.every((i) => !i.nameRaw.trim())}
+          disabled={!plate || items.every((i) => !i.nameRaw.trim()) || !!savedId}
           style={{ height: 56, fontSize: 18 }}
         >
-          {savedId ? 'Сохранить изменения' : 'Сохранить приёмку'}
+          {savedId ? 'Приёмка сохранена' : 'Сохранить приёмку'}
         </Button>
       </div>
       <Modal open={false} onCancel={() => undefined} title="Установить приложение" footer={null}>

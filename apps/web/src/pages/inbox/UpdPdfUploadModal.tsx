@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Button,
@@ -27,10 +27,17 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
   const [form] = Form.useForm<UpdPdfParsed>();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
   function reset() {
     setStage('select');
     setParseRes(null);
     setError(null);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     form.resetFields();
   }

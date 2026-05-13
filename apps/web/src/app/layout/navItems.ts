@@ -11,6 +11,12 @@ export const navItems: NavItem[] = [
   { key: 'kpp', label: 'КПП', path: '/kpp', roles: ['admin', 'manager', 'inspector_kpp'] },
   { key: 'documents', label: 'Документы', path: '/documents', roles: ['admin', 'manager'] },
   {
+    key: 'materials',
+    label: 'Материалы',
+    path: '/materials',
+    roles: ['admin', 'manager', 'inspector_kpp'],
+  },
+  {
     key: 'deliveries',
     label: 'Приёмки',
     path: '/deliveries',
@@ -23,8 +29,8 @@ export const navItems: NavItem[] = [
     roles: ['admin', 'manager'],
   },
   {
-    key: 'materials',
-    label: 'Материалы',
+    key: 'materials-ref',
+    label: 'Справочник материалов',
     path: '/references/materials',
     roles: ['admin', 'manager'],
   },

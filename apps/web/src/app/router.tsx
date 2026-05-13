@@ -13,6 +13,7 @@ const DeliveryDetail = lazy(() => import('../pages/deliveries/DeliveryDetail'));
 const KppPage = lazy(() => import('../pages/kpp/KppPage'));
 const Counterparties = lazy(() => import('../pages/references/Counterparties'));
 const Materials = lazy(() => import('../pages/references/Materials'));
+const MaterialsJournal = lazy(() => import('../pages/materials/MaterialsPage'));
 const AdminUsers = lazy(() => import('../pages/admin/Users'));
 const AdminLlmProviders = lazy(() => import('../pages/admin/LlmProviders'));
 const AdminEdoAccounts = lazy(() => import('../pages/admin/EdoAccounts'));
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
         ),
       },
       { path: 'inbox', element: <Navigate to="/documents" replace /> },
+      { path: 'materials', element: suspense(<MaterialsJournal />) },
       { path: 'deliveries', element: suspense(<DeliveriesList />) },
       { path: 'deliveries/:id', element: suspense(<DeliveryDetail />) },
       {

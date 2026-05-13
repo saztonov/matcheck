@@ -1,31 +1,58 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, sql as drSql } from 'drizzle-orm';
+import { and, desc, eq, ilike, sql as drSql } from 'drizzle-orm';
 import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import {
   ManualUpdUploadResponseSchema,
   SourceDocumentListResponseSchema,
   SourceDocumentDetailSchema,
+  SourceDocumentFileResponseSchema,
   UpdPdfConfirmRequestSchema,
   UpdPdfParseResponseSchema,
   ErrorResponseSchema,
 } from '@matcheck/contracts';
 import {
   counterparties,
+  deliveries,
+  deliverySources,
+  materials,
   sourceDocuments,
   sourceDocumentItems,
   sourceDocumentAttachments,
 } from '../db/schema.js';
 import { parseUpdXml } from '../domain/edo/upd.parser.js';
 import { parseUpdPdf, PdfNoTextError } from '../domain/edo/upd-pdf.parser.js';
-import { copyObject, deleteObject, putObject } from '../domain/storage/s3.signer.js';
+import { copyObject, deleteObject, presign, putObject } from '../domain/storage/s3.signer.js';
 
 const ListQuerySchema = z.object({
   kind: z.enum(['upd', 'request']).optional(),
+  q: z.string().trim().min(1).max(200).optional(),
+  unaccepted: z.coerce.boolean().optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
 });
+
+async function findOrCreateMaterial(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  app: any,
+  { name, unit }: { name: string; unit?: string | null },
+): Promise<string> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('material name is empty');
+  const existing = await app.db
+    .select({ id: materials.id })
+    .from(materials)
+    .where(drSql`lower(${materials.name}) = lower(${trimmed})`)
+    .limit(1);
+  if (existing[0]) return existing[0].id;
+  const [created] = await app.db
+    .insert(materials)
+    .values({ name: trimmed, unit: unit && unit.trim() ? unit.trim() : 'шт' })
+    .returning({ id: materials.id });
+  if (!created) throw new Error('Failed to create material');
+  return created.id;
+}
 
 async function findOrCreateCounterparty(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,8 +116,19 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       schema: { querystring: ListQuerySchema, response: { 200: SourceDocumentListResponseSchema } },
     },
     async (req) => {
-      const { kind, limit, offset } = req.query;
-      const where = kind ? eq(sourceDocuments.kind, kind) : undefined;
+      const { kind, q, unaccepted, limit, offset } = req.query;
+      const conditions = [];
+      if (kind) conditions.push(eq(sourceDocuments.kind, kind));
+      if (q) conditions.push(ilike(sourceDocuments.docNumber, `%${q}%`));
+      if (unaccepted) {
+        const acceptedSub = app.db
+          .select({ id: deliverySources.sourceDocumentId })
+          .from(deliverySources)
+          .innerJoin(deliveries, eq(deliveries.id, deliverySources.deliveryId))
+          .where(eq(deliveries.status, 'verified'));
+        conditions.push(drSql`${sourceDocuments.id} not in ${acceptedSub}`);
+      }
+      const where = conditions.length ? and(...conditions) : undefined;
       const rows = await app.db
         .select()
         .from(sourceDocuments)
@@ -158,6 +196,38 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
     },
   );
 
+  app.get(
+    '/api/v1/source-documents/:id/file',
+    {
+      preHandler: [app.authenticate],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: SourceDocumentFileResponseSchema, 404: ErrorResponseSchema },
+      },
+    },
+    async (req, reply) => {
+      const [att] = await app.db
+        .select()
+        .from(sourceDocumentAttachments)
+        .where(
+          and(
+            eq(sourceDocumentAttachments.sourceDocumentId, req.params.id),
+            eq(sourceDocumentAttachments.role, 'original'),
+          ),
+        )
+        .orderBy(desc(sourceDocumentAttachments.createdAt))
+        .limit(1);
+      if (!att) return reply.code(404).send({ error: 'no_attachment' });
+      try {
+        const url = await presign({ method: 'GET', key: att.s3Key, expiresIn: 3600 });
+        return { url, filename: att.filename, mimeType: att.mimeType };
+      } catch (err) {
+        req.log.warn({ err, key: att.s3Key }, 'presign failed');
+        return reply.code(404).send({ error: 'presign_failed' });
+      }
+    },
+  );
+
   app.post(
     '/api/v1/source-documents/upload-upd',
     {
@@ -198,9 +268,10 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       if (!created) throw new Error('Failed to insert source_document');
 
       if (parsed.items.length) {
-        await app.db.insert(sourceDocumentItems).values(
-          parsed.items.map((it) => ({
+        const itemsWithMaterial = await Promise.all(
+          parsed.items.map(async (it) => ({
             sourceDocumentId: created.id,
+            materialId: await findOrCreateMaterial(app, { name: it.nameRaw, unit: it.unit }),
             nameRaw: it.nameRaw,
             qty: it.qty.toString(),
             unit: it.unit,
@@ -211,6 +282,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
             lineNo: it.lineNo,
           })),
         );
+        await app.db.insert(sourceDocumentItems).values(itemsWithMaterial);
       }
 
       reply.code(201);
@@ -334,9 +406,10 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       if (!created) throw new Error('Failed to insert source_document');
 
       if (parsed.items.length) {
-        await app.db.insert(sourceDocumentItems).values(
-          parsed.items.map((it, idx) => ({
+        const itemsWithMaterial = await Promise.all(
+          parsed.items.map(async (it, idx) => ({
             sourceDocumentId: created.id,
+            materialId: await findOrCreateMaterial(app, { name: it.nameRaw, unit: it.unit }),
             nameRaw: it.nameRaw,
             qty: it.qty.toString(),
             unit: it.unit,
@@ -347,6 +420,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
             lineNo: idx + 1,
           })),
         );
+        await app.db.insert(sourceDocumentItems).values(itemsWithMaterial);
       }
 
       // Перемещаем draft → final S3-ключ

@@ -7,6 +7,7 @@ import type { z } from 'zod';
 import { api } from '../../services/api';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
 import { UpdPdfUploadModal } from './UpdPdfUploadModal';
+import { SourceDocumentDetailModal } from './SourceDocumentDetailModal';
 
 type List = z.infer<typeof SourceDocumentListResponseSchema>;
 type Row = List['items'][number];
@@ -14,6 +15,7 @@ type Row = List['items'][number];
 export default function InboxPage() {
   const [kind, setKind] = useState<'all' | 'upd' | 'request'>('all');
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const qc = useQueryClient();
 
   const list = useQuery({
@@ -66,6 +68,7 @@ export default function InboxPage() {
         items={list.data?.items ?? []}
         loading={list.isLoading}
         rowKey="id"
+        onRowClick={(r) => setSelectedId(r.id)}
         columns={[
           {
             title: 'Тип',
@@ -97,6 +100,11 @@ export default function InboxPage() {
         )}
       />
       <UpdPdfUploadModal open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} />
+      <SourceDocumentDetailModal
+        id={selectedId}
+        open={!!selectedId}
+        onClose={() => setSelectedId(null)}
+      />
     </div>
   );
 }
