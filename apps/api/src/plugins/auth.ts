@@ -22,14 +22,11 @@ declare module 'fastify' {
   }
 }
 
-// Fastify слушает на путях без префикса /api/v1 — внешний nginx делает rewrite
-// /api/v1/<x> → /<x> через trailing slash в proxy_pass. Здесь whitelist для
-// внутренних путей, как их видит сам Fastify.
 const PUBLIC_PATHS = new Set([
   '/health',
-  '/auth/login',
-  '/auth/register',
-  '/auth/refresh',
+  '/api/v1/auth/login',
+  '/api/v1/auth/register',
+  '/api/v1/auth/refresh',
 ]);
 
 export default fp(async (app) => {
