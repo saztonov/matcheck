@@ -36,7 +36,8 @@ export class OpenRouterProvider implements LlmProvider {
         'X-Title': 'matcheck',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
+      // Потолок ожидания, не задержка: тяжёлые УПД-PDF с 50+ позициями требуют больше времени.
+      signal: AbortSignal.timeout(600_000),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');

@@ -15,6 +15,13 @@
       "when": 1778684469398,
       "tag": "0001_add_delivery_status_draft",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778686509391,
+      "tag": "0002_quick_major_mapleleaf",
+      "breakpoints": true
     }
   ]
 }

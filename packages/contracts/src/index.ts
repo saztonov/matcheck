@@ -9,3 +9,4 @@ export * from './llm.js';
 export * from './edo.js';
 export * from './mail.js';
 export * from './sync.js';
+export * from './app-settings.js';

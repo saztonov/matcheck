@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AutoComplete,
   Button,
@@ -12,6 +13,7 @@ import {
   Popconfirm,
   Row,
   Space,
+  Spin,
   Tag,
   Tooltip,
   Typography,
@@ -59,6 +61,10 @@ function newKey(): string {
 }
 
 export default function KppPage() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const deliveryId = params.get('delivery');
+
   const [items, setItems] = useState<DraftItem[]>([]);
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -69,11 +75,44 @@ export default function KppPage() {
   const [savedId, setSavedId] = useState<string | null>(null);
   const [updQuery, setUpdQuery] = useState('');
   const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
+  const [loadedDelivery, setLoadedDelivery] = useState<Delivery | null>(null);
 
   const editingItem = useMemo(
     () => items.find((i) => i.clientKey === editingKey) ?? null,
     [items, editingKey],
   );
+
+  const deliveryQuery = useQuery({
+    queryKey: ['deliveries', deliveryId],
+    queryFn: () => api.get<Delivery>(`/deliveries/${deliveryId}`),
+    enabled: !!deliveryId && !loadedDelivery,
+  });
+
+  useEffect(() => {
+    const d = deliveryQuery.data;
+    if (!d || loadedDelivery) return;
+    setLoadedDelivery(d);
+    setPlate(d.vehiclePlate ?? '');
+    setComment(d.comment ?? '');
+    setItems(
+      d.items.map((it, idx) => ({
+        clientKey: newKey(),
+        lineNo: idx + 1,
+        nameRaw: it.nameRaw,
+        qtyPlanned: it.qtyPlanned,
+        qtyActual: it.qtyActual,
+        unit: it.unit,
+        materialId: it.materialId,
+      })),
+    );
+    setConfirmed(new Set());
+    if (d.sourceDocumentIds.length > 0) {
+      api
+        .get<SourceDocument>(`/source-documents/${d.sourceDocumentIds[0]}`)
+        .then(setSelectedUpd)
+        .catch(() => undefined);
+    }
+  }, [deliveryQuery.data, loadedDelivery]);
 
   const updSuggestions = useQuery({
     queryKey: ['source-documents', 'unaccepted-upd', updQuery],
@@ -110,10 +149,12 @@ export default function KppPage() {
     mutationFn: async (status: SaveStatus) => {
       setPendingStatus(status);
       const payload: DeliveryUpsert = {
+        id: loadedDelivery?.id,
+        baseVersion: loadedDelivery?.version,
         status,
         supplierId: selectedUpd?.supplierId ?? null,
         vehiclePlate: plate || null,
-        arrivedAt: new Date().toISOString(),
+        arrivedAt: loadedDelivery?.arrivedAt ?? new Date().toISOString(),
         comment: comment || null,
         sourceDocumentIds: selectedUpd ? [selectedUpd.id] : [],
         items: items
@@ -130,8 +171,16 @@ export default function KppPage() {
       return api.post<Delivery>('/deliveries', payload);
     },
     onSuccess: (d, status) => {
-      setSavedId(d.id);
-      message.success(status === 'draft' ? 'Черновик сохранён' : 'Приёмка сохранена');
+      setLoadedDelivery(d);
+      if (status === 'verified') {
+        setSavedId(d.id);
+        message.success('Приёмка сохранена');
+      } else {
+        message.success('Черновик сохранён');
+        if (!deliveryId) {
+          navigate(`/kpp?delivery=${d.id}`, { replace: true });
+        }
+      }
       setPendingStatus(null);
     },
     onError: (err: Error) => {
@@ -319,6 +368,24 @@ export default function KppPage() {
 
   const allConfirmed = items.length > 0 && confirmed.size === items.length;
   const locked = !!savedId;
+  const isFromVerified = loadedDelivery?.status === 'verified';
+
+  const verifyReason: string | null = (() => {
+    if (locked) return null;
+    const reasons: string[] = [];
+    if (items.length === 0) reasons.push('Добавьте хотя бы один материал');
+    else if (confirmed.size !== items.length) reasons.push('Подтвердите все строки галочкой');
+    if (!plate.trim()) reasons.push('Заполните госномер');
+    return reasons.length ? reasons.join(' · ') : null;
+  })();
+
+  if (deliveryId && deliveryQuery.isLoading && !loadedDelivery) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: 96 }}>
@@ -513,30 +580,35 @@ export default function KppPage() {
           size="large"
           style={{ flex: 1 }}
           loading={save.isPending && pendingStatus === 'draft'}
-          disabled={locked || (save.isPending && pendingStatus !== 'draft')}
+          disabled={
+            locked || isFromVerified || (save.isPending && pendingStatus !== 'draft')
+          }
           onClick={() => save.mutate('draft')}
         >
           Сохранить черновик
         </Button>
-        <Button
-          type="primary"
-          size="large"
-          style={{
-            flex: 1,
-            background: allConfirmed && !locked ? GREEN : undefined,
-            borderColor: allConfirmed && !locked ? GREEN : undefined,
-          }}
-          loading={save.isPending && pendingStatus === 'verified'}
-          disabled={
-            locked ||
-            !allConfirmed ||
-            !plate.trim() ||
-            (save.isPending && pendingStatus !== 'verified')
-          }
-          onClick={() => save.mutate('verified')}
-        >
-          {locked ? 'Сохранено' : 'Сохранить'}
-        </Button>
+        <Tooltip title={verifyReason ?? ''} placement="top">
+          <span style={{ flex: 1, display: 'inline-flex' }}>
+            <Button
+              type="primary"
+              size="large"
+              style={{
+                flex: 1,
+                background: allConfirmed && !locked && plate.trim() ? GREEN : undefined,
+                borderColor: allConfirmed && !locked && plate.trim() ? GREEN : undefined,
+              }}
+              loading={save.isPending && pendingStatus === 'verified'}
+              disabled={
+                locked ||
+                !!verifyReason ||
+                (save.isPending && pendingStatus !== 'verified')
+              }
+              onClick={() => save.mutate('verified')}
+            >
+              {locked ? 'Сохранено' : 'Сохранить'}
+            </Button>
+          </span>
+        </Tooltip>
       </div>
     </Space>
   );

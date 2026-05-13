@@ -58,6 +58,7 @@ async function request<T>(
     ...init,
     headers,
     credentials: 'include',
+    signal: init.signal,
   });
 
   if (res.status === 401 && !init.retried) {
@@ -107,6 +108,11 @@ export const api = {
       method: 'POST',
       body: body !== undefined ? JSON.stringify(body) : undefined,
     }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: 'PUT',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, {
       method: 'PATCH',
@@ -115,8 +121,12 @@ export const api = {
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
 
-export async function apiUploadFile<T>(path: string, file: File, fieldName = 'file'): Promise<T> {
+export async function apiUploadFile<T>(
+  path: string,
+  file: File,
+  opts: { fieldName?: string; signal?: AbortSignal } = {},
+): Promise<T> {
   const fd = new FormData();
-  fd.append(fieldName, file, file.name);
-  return request<T>(path, { method: 'POST', body: fd });
+  fd.append(opts.fieldName ?? 'file', file, file.name);
+  return request<T>(path, { method: 'POST', body: fd, signal: opts.signal });
 }

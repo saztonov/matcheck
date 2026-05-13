@@ -221,6 +221,12 @@ export const llmProviders = pgTable('llm_providers', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const settings = pgTable('settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ─── Source documents (UPD + Requests) ─────────────────────────────────────
 
 export const sourceDocuments = pgTable(

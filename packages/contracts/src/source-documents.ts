@@ -104,6 +104,7 @@ export const UpdPdfParseResponseSchema = z.object({
   llmProviderId: z.string().uuid().nullable(),
   llmConfidence: z.number().min(0).max(1),
   textLength: z.number(),
+  parseSource: z.enum(['llm', 'local']),
 });
 export type UpdPdfParseResponse = z.infer<typeof UpdPdfParseResponseSchema>;
 

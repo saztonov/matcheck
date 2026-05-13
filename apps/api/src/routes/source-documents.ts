@@ -24,7 +24,9 @@ import {
 } from '../db/schema.js';
 import { parseUpdXml } from '../domain/edo/upd.parser.js';
 import { parseUpdPdf, PdfNoTextError } from '../domain/edo/upd-pdf.parser.js';
+import { parseUpdPdfLocal } from '../domain/edo/upd-pdf-local.parser.js';
 import { copyObject, deleteObject, presign, putObject } from '../domain/storage/s3.signer.js';
+import { getUpdParseMode } from '../domain/settings/app-settings.js';
 
 const ListQuerySchema = z.object({
   kind: z.enum(['upd', 'request']).optional(),
@@ -390,9 +392,20 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
         return reply.code(400).send({ error: 'empty_file', message: 'Файл пустой' });
       }
 
+      // Режим парсинга: query-override (для кнопки «Распознать через LLM»),
+      // иначе настройка из таблицы settings (по умолчанию 'llm').
+      const overrideMode = (req.query as { mode?: string } | undefined)?.mode;
+      const effectiveMode =
+        overrideMode === 'local' || overrideMode === 'llm'
+          ? overrideMode
+          : await getUpdParseMode();
+
       let parseResult;
       try {
-        parseResult = await parseUpdPdf(buffer);
+        parseResult =
+          effectiveMode === 'local'
+            ? await parseUpdPdfLocal(buffer)
+            : await parseUpdPdf(buffer);
       } catch (err) {
         if (err instanceof PdfNoTextError) {
           return reply.code(400).send({
@@ -422,6 +435,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
         llmProviderId: parseResult.llmProviderId,
         llmConfidence: parseResult.parsed.confidence,
         textLength: parseResult.textLength,
+        parseSource: effectiveMode,
       };
       return UpdPdfParseResponseSchema.parse(response);
     },

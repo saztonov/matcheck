@@ -19,6 +19,11 @@ import { api, apiUploadFile, ApiError } from '../../services/api';
 
 type Stage = 'select' | 'parsing' | 'review' | 'saving';
 
+// Потолок ожидания запроса распознавания УПД (10 мин + 1 мин буфер). На сервере
+// LLM-запрос ограничен 600с, Fastify requestTimeout — 660с; клиент не должен
+// обрывать раньше сервера.
+const PARSE_TIMEOUT_MS = 660_000;
+
 export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const [stage, setStage] = useState<Stage>('select');
@@ -26,6 +31,7 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
   const [error, setError] = useState<string | null>(null);
   const [form] = Form.useForm<UpdPdfParsed>();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [lastFile, setLastFile] = useState<File | null>(null);
 
   useEffect(() => {
     return () => {
@@ -39,6 +45,7 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
     setError(null);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
+    setLastFile(null);
     form.resetFields();
   }
 
@@ -47,28 +54,43 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
     onClose();
   }
 
+  async function parseFile(file: File, modeOverride?: 'llm' | 'local'): Promise<void> {
+    setError(null);
+    setStage('parsing');
+    const ac = new AbortController();
+    const timer = window.setTimeout(() => ac.abort(), PARSE_TIMEOUT_MS);
+    try {
+      const path = modeOverride
+        ? `/source-documents/parse-upd-pdf?mode=${modeOverride}`
+        : '/source-documents/parse-upd-pdf';
+      const res = await apiUploadFile<UpdPdfParseResponse>(path, file, { signal: ac.signal });
+      setParseRes(res);
+      form.setFieldsValue(res.parsed);
+      setStage('review');
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === 'AbortError';
+      const msg = aborted
+        ? 'Распознавание превысило 10 минут — попробуйте позже или другой режим'
+        : err instanceof ApiError
+          ? err.message
+          : 'Не удалось разобрать PDF';
+      setError(msg);
+      setStage('select');
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
   const uploadProps: UploadProps = {
     accept: '.pdf,application/pdf',
     maxCount: 1,
     showUploadList: false,
     beforeUpload: async (file) => {
-      setError(null);
-      setStage('parsing');
-      try {
-        const localUrl = URL.createObjectURL(file);
-        setPreviewUrl(localUrl);
-        const res = await apiUploadFile<UpdPdfParseResponse>(
-          '/source-documents/parse-upd-pdf',
-          file as unknown as File,
-        );
-        setParseRes(res);
-        form.setFieldsValue(res.parsed);
-        setStage('review');
-      } catch (err) {
-        const msg = err instanceof ApiError ? err.message : 'Не удалось разобрать PDF';
-        setError(msg);
-        setStage('select');
-      }
+      const f = file as unknown as File;
+      const localUrl = URL.createObjectURL(f);
+      setPreviewUrl(localUrl);
+      setLastFile(f);
+      await parseFile(f);
       return false;
     },
   };
@@ -94,6 +116,8 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
   };
 
   const lowConfidence = parseRes && parseRes.llmConfidence < 0.7;
+  const localEmpty =
+    parseRes && parseRes.parseSource === 'local' && parseRes.parsed.items.length === 0;
 
   return (
     <Modal
@@ -139,7 +163,7 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
       {stage === 'parsing' && (
         <Space direction="vertical" align="center" style={{ width: '100%', padding: 32 }}>
           <Spin size="large" />
-          <Typography.Text>Распознавание PDF через LLM…</Typography.Text>
+          <Typography.Text>Распознавание PDF… (до 10 минут)</Typography.Text>
         </Space>
       )}
 
@@ -157,10 +181,31 @@ export function UpdPdfUploadModal({ open, onClose }: { open: boolean; onClose: (
             )}
           </div>
           <div style={{ flex: 1, minWidth: 0, maxHeight: '70vh', overflowY: 'auto' }}>
-            {lowConfidence && (
+            {localEmpty && (
               <Alert
                 type="warning"
-                message={`Низкая уверенность: ${(parseRes.llmConfidence * 100).toFixed(0)}%`}
+                message="Локальный парсер не распознал ни одной позиции"
+                description="Шаблон документа отличается от поддерживаемого. Можно попробовать распознать через LLM."
+                action={
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={() => lastFile && void parseFile(lastFile, 'llm')}
+                    disabled={!lastFile}
+                  >
+                    Распознать через LLM
+                  </Button>
+                }
+                showIcon
+                style={{ marginBottom: 12 }}
+              />
+            )}
+            {lowConfidence && !localEmpty && (
+              <Alert
+                type="warning"
+                message={`Низкая уверенность: ${(parseRes.llmConfidence * 100).toFixed(0)}% (${
+                  parseRes.parseSource === 'local' ? 'локально' : 'через LLM'
+                })`}
                 description="Проверьте данные перед сохранением."
                 showIcon
                 style={{ marginBottom: 12 }}

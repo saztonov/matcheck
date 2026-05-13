@@ -24,6 +24,7 @@ import { llmProviderRoutes } from './routes/admin/llm-providers.js';
 import { edoAccountRoutes } from './routes/admin/edo-accounts.js';
 import { mailAccountRoutes } from './routes/admin/mail-accounts.js';
 import { userAdminRoutes } from './routes/admin/users.js';
+import { appSettingsRoutes } from './routes/admin/settings.js';
 
 export async function buildServer() {
   const env = loadEnv();
@@ -32,6 +33,10 @@ export async function buildServer() {
     loggerInstance: logger,
     disableRequestLogging: env.NODE_ENV === 'production',
     trustProxy: true,
+    // Потолок ожидания запроса (не задержка). Нужен для тяжёлых УПД-PDF,
+    // где LLM может работать несколько минут — см. parse-upd-pdf.
+    requestTimeout: 660_000,
+    keepAliveTimeout: 70_000,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
@@ -58,6 +63,7 @@ export async function buildServer() {
   await app.register(edoAccountRoutes);
   await app.register(mailAccountRoutes);
   await app.register(userAdminRoutes);
+  await app.register(appSettingsRoutes);
 
   app.setErrorHandler((err, req, reply) => {
     req.log.error({ err }, 'request error');
