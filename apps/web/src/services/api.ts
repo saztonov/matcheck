@@ -66,7 +66,7 @@ async function request<T>(
       useAuthStore.getState().setAccessToken(newToken);
       return request<T>(path, { ...init, retried: true });
     }
-    useAuthStore.getState().clear();
+    useAuthStore.getState().expireSession();
     throw new ApiError(401, 'unauthorized', 'Session expired');
   }
 

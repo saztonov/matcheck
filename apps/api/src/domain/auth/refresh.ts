@@ -157,13 +157,35 @@ export function refreshCookieOptions(): {
   domain?: string;
   maxAge: number;
 } {
+  // __Host- prefix (prod) требует Path=/, Secure и запрещает Domain (RFC 6265bis).
+  // В dev cookie без префикса — допускаем COOKIE_DOMAIN.
+  const isHostPrefixed = ENV.COOKIE_SECURE;
+  return {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: ENV.COOKIE_SECURE,
+    ...(!isHostPrefixed && ENV.COOKIE_DOMAIN ? { domain: ENV.COOKIE_DOMAIN } : {}),
+    maxAge: ENV.REFRESH_TOKEN_TTL_DAYS * 86400,
+  };
+}
+
+// Legacy: до фикса refresh-cookie выпускалась с path=/api/v1/auth. На один-два
+// релиза очищаем её в /auth/refresh и /auth/logout, чтобы не оставалось двух
+// одноимённых cookie у пользователей.
+export function legacyRefreshCookieOptions(): {
+  path: string;
+  httpOnly: true;
+  sameSite: 'strict';
+  secure: boolean;
+  domain?: string;
+} {
   return {
     path: '/api/v1/auth',
     httpOnly: true,
     sameSite: 'strict',
     secure: ENV.COOKIE_SECURE,
     ...(ENV.COOKIE_DOMAIN ? { domain: ENV.COOKIE_DOMAIN } : {}),
-    maxAge: ENV.REFRESH_TOKEN_TTL_DAYS * 86400,
   };
 }
 

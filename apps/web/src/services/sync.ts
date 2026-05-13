@@ -3,6 +3,7 @@ import { api, ApiError, ConflictError } from './api';
 import { db } from '../lib/db';
 import { upsertServerSnapshot, buildUpsertPayload } from './deliveries';
 import { getSetting, setSetting } from '../lib/db';
+import { useAuthStore } from '../stores/auth';
 
 const CURSOR_KEY = 'sync_cursor';
 const RUNNING = { value: false };
@@ -75,11 +76,17 @@ export async function pushPendingMutations(): Promise<{ pushed: number; conflict
 
 export async function runSync(): Promise<void> {
   if (RUNNING.value) return;
+  if (!useAuthStore.getState().accessToken) return;
   RUNNING.value = true;
   try {
     await pushPendingMutations();
     await pullSync();
   } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      // session expired — store уже помечен expireSession(); ProtectedRoute
+      // редиректит, повторять sync смысла нет
+      return;
+    }
     console.warn('sync failed', err);
   } finally {
     RUNNING.value = false;

@@ -16,6 +16,7 @@ import { signAccessToken } from '../domain/auth/jwt.js';
 import {
   createSessionAndRefresh,
   refreshCookieOptions,
+  legacyRefreshCookieOptions,
   rotateRefreshToken,
   REFRESH_COOKIE_NAME,
   ACCESS_COOKIE_NAME,
@@ -222,6 +223,7 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
       );
       if (!result) {
         reply.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+        reply.clearCookie(REFRESH_COOKIE_NAME, legacyRefreshCookieOptions());
         return reply.code(401).send({ error: 'invalid_refresh' });
       }
       const [user] = await app.db
@@ -237,6 +239,7 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
         sid: result.sessionId,
         aal: 'aal1',
       });
+      reply.clearCookie(REFRESH_COOKIE_NAME, legacyRefreshCookieOptions());
       reply.setCookie(REFRESH_COOKIE_NAME, result.newToken, refreshCookieOptions());
       reply.setCookie(ACCESS_COOKIE_NAME, access, accessCookieOptions());
       return { accessToken: access, expiresIn: env.ACCESS_TOKEN_TTL_SECONDS };
@@ -254,6 +257,7 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
       if (presented) await revokeByToken(presented);
       else if (req.user) await revokeBySessionId(req.user.sessionId);
       reply.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+      reply.clearCookie(REFRESH_COOKIE_NAME, legacyRefreshCookieOptions());
       reply.clearCookie(ACCESS_COOKIE_NAME, accessCookieOptions());
       if (req.user) {
         await app.db.insert(authEvents).values({
