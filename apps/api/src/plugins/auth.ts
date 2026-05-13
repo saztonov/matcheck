@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { verifyAccessToken, type AccessTokenClaims } from '../domain/auth/jwt.js';
 import { users, sessions, unauthorizedAccessLog } from '../db/schema.js';
+import { ACCESS_COOKIE_NAME } from '../domain/auth/refresh.js';
 
 export type AuthUser = {
   id: string;
@@ -52,9 +53,18 @@ export default fp(async (app) => {
   }
 
   async function attachUser(req: FastifyRequest): Promise<AuthUser | null> {
+    // Основной источник — Authorization: Bearer <jwt>. Fallback на cookie нужен
+    // только для клиентов, которые не умеют выставлять заголовок (нативный
+    // EventSource, например, для SSE на /api/v1/events).
     const header = req.headers.authorization;
-    if (!header?.startsWith('Bearer ')) return null;
-    const token = header.slice(7);
+    let token: string | undefined;
+    if (header?.startsWith('Bearer ')) {
+      token = header.slice(7);
+    } else {
+      const cookieToken = req.cookies[ACCESS_COOKIE_NAME];
+      if (cookieToken) token = cookieToken;
+    }
+    if (!token) return null;
     try {
       const claims: AccessTokenClaims = await verifyAccessToken(token);
       const [session] = await app.db

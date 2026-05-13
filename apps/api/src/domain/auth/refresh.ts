@@ -168,3 +168,25 @@ export function refreshCookieOptions(): {
 }
 
 export const REFRESH_COOKIE_NAME = ENV.COOKIE_SECURE ? '__Host-refresh' : 'refresh';
+
+// Access-token-cookie выдаётся дополнительно к Bearer header — нужен только для тех
+// клиентских механизмов, которые не умеют отправлять Authorization (нативный
+// EventSource, <img>, multipart upload-formы и т.п.). Bearer header остаётся
+// основным способом авторизации; cookie — fallback.
+export const ACCESS_COOKIE_NAME = ENV.COOKIE_SECURE ? '__Host-access' : 'access';
+
+export function accessCookieOptions(): {
+  path: string;
+  httpOnly: true;
+  sameSite: 'strict';
+  secure: boolean;
+  maxAge: number;
+} {
+  return {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: ENV.COOKIE_SECURE,
+    maxAge: ENV.ACCESS_TOKEN_TTL_SECONDS,
+  };
+}

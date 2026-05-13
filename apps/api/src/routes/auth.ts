@@ -18,6 +18,8 @@ import {
   refreshCookieOptions,
   rotateRefreshToken,
   REFRESH_COOKIE_NAME,
+  ACCESS_COOKIE_NAME,
+  accessCookieOptions,
   revokeByToken,
   revokeBySessionId,
 } from '../domain/auth/refresh.js';
@@ -174,6 +176,7 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
       });
 
       reply.setCookie(REFRESH_COOKIE_NAME, refresh.token, refreshCookieOptions());
+      reply.setCookie(ACCESS_COOKIE_NAME, access, accessCookieOptions());
       return {
         accessToken: access,
         expiresIn: env.ACCESS_TOKEN_TTL_SECONDS,
@@ -216,6 +219,7 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
         aal: 'aal1',
       });
       reply.setCookie(REFRESH_COOKIE_NAME, result.newToken, refreshCookieOptions());
+      reply.setCookie(ACCESS_COOKIE_NAME, access, accessCookieOptions());
       return { accessToken: access, expiresIn: env.ACCESS_TOKEN_TTL_SECONDS };
     },
   );
@@ -231,6 +235,7 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
       if (presented) await revokeByToken(presented);
       else if (req.user) await revokeBySessionId(req.user.sessionId);
       reply.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+      reply.clearCookie(ACCESS_COOKIE_NAME, accessCookieOptions());
       if (req.user) {
         await app.db.insert(authEvents).values({
           userId: req.user.id,
