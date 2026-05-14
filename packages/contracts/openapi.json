@@ -289,6 +289,35 @@
           },
           "lineNo": {
             "type": "number"
+          },
+          "volumeM3": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "massKg": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volumeConfidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "groupName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -299,7 +328,11 @@
           "qtyActual",
           "unit",
           "comment",
-          "lineNo"
+          "lineNo",
+          "volumeM3",
+          "massKg",
+          "volumeConfidence",
+          "groupName"
         ]
       },
       "DeliveryPhoto": {
@@ -388,7 +421,18 @@
               "sortOrder"
             ]
           },
+          "siteId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "supplierId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "contractorId": {
             "type": [
               "string",
               "null"
@@ -478,6 +522,35 @@
                 },
                 "lineNo": {
                   "type": "number"
+                },
+                "volumeM3": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "massKg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "volumeConfidence": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                "groupName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -488,7 +561,11 @@
                 "qtyActual",
                 "unit",
                 "comment",
-                "lineNo"
+                "lineNo",
+                "volumeM3",
+                "massKg",
+                "volumeConfidence",
+                "groupName"
               ]
             }
           },
@@ -549,7 +626,9 @@
         "required": [
           "id",
           "status",
+          "siteId",
           "supplierId",
+          "contractorId",
           "vehiclePlate",
           "driverName",
           "arrivedAt",
@@ -578,7 +657,18 @@
               "filled"
             ]
           },
+          "siteId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "supplierId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "contractorId": {
             "type": [
               "string",
               "null"
@@ -664,6 +754,35 @@
                 },
                 "lineNo": {
                   "type": "number"
+                },
+                "volumeM3": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "massKg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "volumeConfidence": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                "groupName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -679,7 +798,8 @@
           }
         },
         "required": [
-          "statusCode"
+          "statusCode",
+          "siteId"
         ]
       },
       "DeliveryListResponse": {
@@ -729,7 +849,18 @@
                     "sortOrder"
                   ]
                 },
+                "siteId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
                 "supplierId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "contractorId": {
                   "type": [
                     "string",
                     "null"
@@ -819,6 +950,35 @@
                       },
                       "lineNo": {
                         "type": "number"
+                      },
+                      "volumeM3": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "massKg": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "volumeConfidence": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "groupName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "required": [
@@ -829,7 +989,11 @@
                       "qtyActual",
                       "unit",
                       "comment",
-                      "lineNo"
+                      "lineNo",
+                      "volumeM3",
+                      "massKg",
+                      "volumeConfidence",
+                      "groupName"
                     ]
                   }
                 },
@@ -890,7 +1054,9 @@
               "required": [
                 "id",
                 "status",
+                "siteId",
                 "supplierId",
+                "contractorId",
                 "vehiclePlate",
                 "driverName",
                 "arrivedAt",
@@ -968,7 +1134,18 @@
                   "sortOrder"
                 ]
               },
+              "siteId": {
+                "type": "string",
+                "format": "uuid"
+              },
               "supplierId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "contractorId": {
                 "type": [
                   "string",
                   "null"
@@ -1058,6 +1235,35 @@
                     },
                     "lineNo": {
                       "type": "number"
+                    },
+                    "volumeM3": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "massKg": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "volumeConfidence": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ]
+                    },
+                    "groupName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -1068,7 +1274,11 @@
                     "qtyActual",
                     "unit",
                     "comment",
-                    "lineNo"
+                    "lineNo",
+                    "volumeM3",
+                    "massKg",
+                    "volumeConfidence",
+                    "groupName"
                   ]
                 }
               },
@@ -1129,7 +1339,9 @@
             "required": [
               "id",
               "status",
+              "siteId",
               "supplierId",
+              "contractorId",
               "vehiclePlate",
               "driverName",
               "arrivedAt",
@@ -1229,6 +1441,35 @@
           },
           "lineNo": {
             "type": "number"
+          },
+          "volumeM3": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "massKg": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "volumeConfidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "groupName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1242,7 +1483,11 @@
           "vatRate",
           "vatSum",
           "expectedDate",
-          "lineNo"
+          "lineNo",
+          "volumeM3",
+          "massKg",
+          "volumeConfidence",
+          "groupName"
         ]
       },
       "SourceAttachment": {
@@ -1386,6 +1631,105 @@
           },
           "updatedAt": {
             "type": "string"
+          },
+          "validation": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "hasMismatch": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "checks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "sum_total",
+                        "vat_total",
+                        "items_count",
+                        "row_qty_price",
+                        "row_vat_rate"
+                      ]
+                    },
+                    "scope": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "document"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "row": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0
+                            }
+                          },
+                          "required": [
+                            "row"
+                          ]
+                        }
+                      ]
+                    },
+                    "expected": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "actual": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "diff": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "tolerance": {
+                      "type": "number"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "skipReason": {
+                      "type": "string",
+                      "enum": [
+                        "no_expected",
+                        "no_actual"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "scope",
+                    "expected",
+                    "actual",
+                    "diff",
+                    "tolerance",
+                    "ok"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "hasMismatch",
+              "checkedAt",
+              "checks"
+            ]
           }
         },
         "required": [
@@ -1405,7 +1749,8 @@
           "parsedAt",
           "version",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "validation"
         ]
       },
       "SourceDocumentDetail": {
@@ -1508,6 +1853,105 @@
           "updatedAt": {
             "type": "string"
           },
+          "validation": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "hasMismatch": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "type": "string"
+              },
+              "checks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "sum_total",
+                        "vat_total",
+                        "items_count",
+                        "row_qty_price",
+                        "row_vat_rate"
+                      ]
+                    },
+                    "scope": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "document"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "row": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0
+                            }
+                          },
+                          "required": [
+                            "row"
+                          ]
+                        }
+                      ]
+                    },
+                    "expected": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "actual": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "diff": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "tolerance": {
+                      "type": "number"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "skipReason": {
+                      "type": "string",
+                      "enum": [
+                        "no_expected",
+                        "no_actual"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "scope",
+                    "expected",
+                    "actual",
+                    "diff",
+                    "tolerance",
+                    "ok"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "hasMismatch",
+              "checkedAt",
+              "checks"
+            ]
+          },
           "items": {
             "type": "array",
             "items": {
@@ -1565,6 +2009,35 @@
                 },
                 "lineNo": {
                   "type": "number"
+                },
+                "volumeM3": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "massKg": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "volumeConfidence": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                "groupName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -1578,7 +2051,11 @@
                 "vatRate",
                 "vatSum",
                 "expectedDate",
-                "lineNo"
+                "lineNo",
+                "volumeM3",
+                "massKg",
+                "volumeConfidence",
+                "groupName"
               ]
             }
           },
@@ -1646,6 +2123,7 @@
           "version",
           "createdAt",
           "updatedAt",
+          "validation",
           "items",
           "attachments"
         ]
@@ -1754,6 +2232,105 @@
                 },
                 "updatedAt": {
                   "type": "string"
+                },
+                "validation": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "hasMismatch": {
+                      "type": "boolean"
+                    },
+                    "checkedAt": {
+                      "type": "string"
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "enum": [
+                              "sum_total",
+                              "vat_total",
+                              "items_count",
+                              "row_qty_price",
+                              "row_vat_rate"
+                            ]
+                          },
+                          "scope": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "document"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "row": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "row"
+                                ]
+                              }
+                            ]
+                          },
+                          "expected": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "actual": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "diff": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "tolerance": {
+                            "type": "number"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "skipReason": {
+                            "type": "string",
+                            "enum": [
+                              "no_expected",
+                              "no_actual"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "scope",
+                          "expected",
+                          "actual",
+                          "diff",
+                          "tolerance",
+                          "ok"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "hasMismatch",
+                    "checkedAt",
+                    "checks"
+                  ]
                 }
               },
               "required": [
@@ -1773,7 +2350,8 @@
                 "parsedAt",
                 "version",
                 "createdAt",
-                "updatedAt"
+                "updatedAt",
+                "validation"
               ]
             }
           },
@@ -1798,6 +2376,18 @@
       "PhotoPresignRequest": {
         "type": "object",
         "properties": {
+          "operationKind": {
+            "type": "string",
+            "enum": [
+              "delivery",
+              "shipment"
+            ],
+            "default": "delivery"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "deliveryId": {
             "type": "string",
             "format": "uuid"
@@ -1829,7 +2419,6 @@
           }
         },
         "required": [
-          "deliveryId",
           "kind",
           "contentHash",
           "idempotencyKey"
@@ -1892,6 +2481,20 @@
           "expiresIn"
         ]
       },
+      "PhotoDeleteResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
       "Counterparty": {
         "type": "object",
         "properties": {
@@ -1926,7 +2529,7 @@
           "isCustomer": {
             "type": "boolean"
           },
-          "isCarrier": {
+          "isContractor": {
             "type": "boolean"
           },
           "createdAt": {
@@ -1945,7 +2548,7 @@
           "isSelf",
           "isSupplier",
           "isCustomer",
-          "isCarrier",
+          "isContractor",
           "createdAt",
           "updatedAt"
         ]
@@ -1989,7 +2592,7 @@
                 "isCustomer": {
                   "type": "boolean"
                 },
-                "isCarrier": {
+                "isContractor": {
                   "type": "boolean"
                 },
                 "createdAt": {
@@ -2008,7 +2611,7 @@
                 "isSelf",
                 "isSupplier",
                 "isCustomer",
-                "isCarrier",
+                "isContractor",
                 "createdAt",
                 "updatedAt"
               ]
@@ -2158,7 +2761,18 @@
                     "sortOrder"
                   ]
                 },
+                "siteId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
                 "supplierId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "contractorId": {
                   "type": [
                     "string",
                     "null"
@@ -2248,6 +2862,35 @@
                       },
                       "lineNo": {
                         "type": "number"
+                      },
+                      "volumeM3": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "massKg": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "volumeConfidence": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "groupName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "required": [
@@ -2258,7 +2901,11 @@
                       "qtyActual",
                       "unit",
                       "comment",
-                      "lineNo"
+                      "lineNo",
+                      "volumeM3",
+                      "massKg",
+                      "volumeConfidence",
+                      "groupName"
                     ]
                   }
                 },
@@ -2319,10 +2966,288 @@
               "required": [
                 "id",
                 "status",
+                "siteId",
                 "supplierId",
+                "contractorId",
                 "vehiclePlate",
                 "driverName",
                 "arrivedAt",
+                "inspectorId",
+                "comment",
+                "version",
+                "sourceDocumentIds",
+                "items",
+                "photos",
+                "createdAt",
+                "updatedAt"
+              ]
+            }
+          },
+          "shipments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "status": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "entityType": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "color": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "sortOrder": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "entityType",
+                    "code",
+                    "label",
+                    "color",
+                    "sortOrder"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "contractor",
+                    "return",
+                    "transfer",
+                    "writeoff"
+                  ]
+                },
+                "siteId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "receiverCounterpartyId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "destSiteId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "vehiclePlate": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "driverName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "shippedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "inspectorId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "comment": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version": {
+                  "type": "number"
+                },
+                "sourceDocumentIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "materialId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "uuid"
+                      },
+                      "nameRaw": {
+                        "type": "string"
+                      },
+                      "qtyPlanned": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "qtyActual": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "unit": {
+                        "type": "string"
+                      },
+                      "comment": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "lineNo": {
+                        "type": "number"
+                      },
+                      "volumeM3": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "massKg": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "volumeConfidence": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "groupName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "materialId",
+                      "nameRaw",
+                      "qtyPlanned",
+                      "qtyActual",
+                      "unit",
+                      "comment",
+                      "lineNo",
+                      "volumeM3",
+                      "massKg",
+                      "volumeConfidence",
+                      "groupName"
+                    ]
+                  }
+                },
+                "photos": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "document",
+                          "cargo",
+                          "vehicle",
+                          "other"
+                        ]
+                      },
+                      "s3Key": {
+                        "type": "string"
+                      },
+                      "thumbS3Key": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "contentHash": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "takenAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind",
+                      "s3Key",
+                      "thumbS3Key",
+                      "contentHash",
+                      "takenAt"
+                    ]
+                  }
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "kind",
+                "siteId",
+                "receiverCounterpartyId",
+                "destSiteId",
+                "vehiclePlate",
+                "driverName",
+                "shippedAt",
                 "inspectorId",
                 "comment",
                 "version",
@@ -2436,6 +3361,105 @@
                 "updatedAt": {
                   "type": "string"
                 },
+                "validation": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "hasMismatch": {
+                      "type": "boolean"
+                    },
+                    "checkedAt": {
+                      "type": "string"
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "enum": [
+                              "sum_total",
+                              "vat_total",
+                              "items_count",
+                              "row_qty_price",
+                              "row_vat_rate"
+                            ]
+                          },
+                          "scope": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "document"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "row": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "row"
+                                ]
+                              }
+                            ]
+                          },
+                          "expected": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "actual": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "diff": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "tolerance": {
+                            "type": "number"
+                          },
+                          "ok": {
+                            "type": "boolean"
+                          },
+                          "skipReason": {
+                            "type": "string",
+                            "enum": [
+                              "no_expected",
+                              "no_actual"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "scope",
+                          "expected",
+                          "actual",
+                          "diff",
+                          "tolerance",
+                          "ok"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "hasMismatch",
+                    "checkedAt",
+                    "checks"
+                  ]
+                },
                 "items": {
                   "type": "array",
                   "items": {
@@ -2493,6 +3517,35 @@
                       },
                       "lineNo": {
                         "type": "number"
+                      },
+                      "volumeM3": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "massKg": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "volumeConfidence": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "groupName": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "required": [
@@ -2506,7 +3559,11 @@
                       "vatRate",
                       "vatSum",
                       "expectedDate",
-                      "lineNo"
+                      "lineNo",
+                      "volumeM3",
+                      "massKg",
+                      "volumeConfidence",
+                      "groupName"
                     ]
                   }
                 },
@@ -2574,6 +3631,7 @@
                 "version",
                 "createdAt",
                 "updatedAt",
+                "validation",
                 "items",
                 "attachments"
               ]
@@ -2615,7 +3673,7 @@
                 "isCustomer": {
                   "type": "boolean"
                 },
-                "isCarrier": {
+                "isContractor": {
                   "type": "boolean"
                 },
                 "createdAt": {
@@ -2634,7 +3692,7 @@
                 "isSelf",
                 "isSupplier",
                 "isCustomer",
-                "isCarrier",
+                "isContractor",
                 "createdAt",
                 "updatedAt"
               ]
@@ -2678,6 +3736,55 @@
               ]
             }
           },
+          "sites": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "fullName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "address": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "isActive": {
+                  "type": "boolean"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "code",
+                "name",
+                "fullName",
+                "address",
+                "isActive",
+                "createdAt",
+                "updatedAt"
+              ]
+            }
+          },
           "serverNow": {
             "type": "string"
           }
@@ -2685,9 +3792,11 @@
         "required": [
           "cursor",
           "deliveries",
+          "shipments",
           "sourceDocuments",
           "counterparties",
           "materials",
+          "sites",
           "serverNow"
         ]
       },
@@ -2699,9 +3808,12 @@
             "enum": [
               "delivery_updated",
               "delivery_deleted",
+              "shipment_updated",
+              "shipment_deleted",
               "source_document_updated",
               "counterparty_updated",
               "material_updated",
+              "site_updated",
               "ping"
             ]
           },
@@ -3457,7 +4569,7 @@
               "enum": [
                 "supplier",
                 "customer",
-                "carrier"
+                "contractor"
               ]
             },
             "required": false,
@@ -3679,6 +4791,73 @@
           },
           "401": {
             "description": "Не авторизовано",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Фото не найдено",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/photos/{id}": {
+      "delete": {
+        "tags": [
+          "Photos"
+        ],
+        "summary": "Удалить фото (только admin)",
+        "description": "Удаляет запись из delivery_photos и связанные объекты в S3 (основной + thumb). Доступно только пользователям с ролью admin. Ошибки S3 не валят запрос — логируются.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Фото удалено",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoDeleteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизовано",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Доступ запрещён (недостаточно прав)",
             "content": {
               "application/json": {
                 "schema": {

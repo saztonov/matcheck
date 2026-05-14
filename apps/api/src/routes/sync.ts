@@ -154,7 +154,7 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           isSelf: c.isSelf,
           isSupplier: c.isSupplier,
           isCustomer: c.isCustomer,
-          isCarrier: c.isCarrier,
+          isContractor: c.isContractor,
           createdAt: c.createdAt.toISOString(),
           updatedAt: c.updatedAt.toISOString(),
         })),

@@ -12,7 +12,7 @@ import { counterparties } from '../db/schema.js';
 
 const ListQuerySchema = z.object({
   q: z.string().optional(),
-  role: z.enum(['supplier', 'customer', 'carrier']).optional(),
+  role: z.enum(['supplier', 'customer', 'contractor']).optional(),
   limit: z.coerce.number().int().positive().max(200).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
 });
@@ -27,7 +27,7 @@ function row(c: typeof counterparties.$inferSelect) {
     isSelf: c.isSelf,
     isSupplier: c.isSupplier,
     isCustomer: c.isCustomer,
-    isCarrier: c.isCarrier,
+    isContractor: c.isContractor,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };
@@ -49,7 +49,7 @@ export async function counterpartyRoutes(rawApp: FastifyInstance): Promise<void>
       }
       if (role === 'supplier') filters.push(eq(counterparties.isSupplier, true));
       if (role === 'customer') filters.push(eq(counterparties.isCustomer, true));
-      if (role === 'carrier') filters.push(eq(counterparties.isCarrier, true));
+      if (role === 'contractor') filters.push(eq(counterparties.isContractor, true));
       const where = filters.length ? and(...filters) : undefined;
 
       const rows = await app.db
