@@ -41,7 +41,6 @@ import {
   effectiveState,
   enqueueMutation,
   getShipment,
-  markTombstone,
   upsertServerSnapshot,
 } from '../../services/shipments';
 import { runSync } from '../../services/sync';
@@ -294,45 +293,6 @@ export default function ShipmentPage() {
     },
     onSuccess: () => {
       message.success('Отгрузка сохранена');
-      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
-      navigate('/shipments');
-    },
-    onError: (err: Error) => message.error(err.message),
-  });
-
-  const cancel = useMutation({
-    mutationFn: async () => {
-      if (!shipmentId) return;
-      const dbi = await db();
-      const local = await dbi.get('shipments', shipmentId);
-      if (!local || local.server === null) {
-        const photoIds = (
-          await dbi.transaction('photos').store.index('byDelivery').getAll(shipmentId)
-        )
-          .filter((p) => p.operationKind === 'shipment')
-          .map((p) => p.id);
-        const mutationIds = (
-          await dbi.transaction('mutations').store.index('byEntity').getAll(shipmentId)
-        ).map((m) => m.id);
-        const tx = dbi.transaction(['shipments', 'photos', 'mutations'], 'readwrite');
-        for (const pid of photoIds) await tx.objectStore('photos').delete(pid);
-        for (const mid of mutationIds) await tx.objectStore('mutations').delete(mid);
-        await tx.objectStore('shipments').delete(shipmentId);
-        await tx.done;
-        return;
-      }
-      await markTombstone(shipmentId);
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'shipment_delete',
-        entityId: shipmentId,
-        baseVersion: loadedShipment?.version ?? local.version,
-        payload: null,
-      });
-      void runSync();
-    },
-    onSuccess: () => {
-      message.success('Отгрузка удалена');
       void queryClient.invalidateQueries({ queryKey: ['shipments'] });
       navigate('/shipments');
     },
@@ -701,18 +661,13 @@ export default function ShipmentPage() {
             gap: 8,
           }}
         >
-          <Popconfirm
-            title="Удалить эту отгрузку?"
-            description="Запись и связанные фото будут удалены."
-            okText="Да, удалить"
-            cancelText="Нет"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => cancel.mutate()}
+          <Button
+            size="large"
+            style={{ flex: 1 }}
+            onClick={() => navigate('/shipments')}
           >
-            <Button size="large" danger loading={cancel.isPending} style={{ flex: 1 }}>
-              Отмена
-            </Button>
-          </Popconfirm>
+            Отмена
+          </Button>
           <Tooltip title={verifyReason ?? ''} placement="top">
             <span style={{ flex: 1, display: 'inline-flex' }}>
               <Button

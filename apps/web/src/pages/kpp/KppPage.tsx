@@ -7,7 +7,6 @@ import {
   Collapse,
   Input,
   InputNumber,
-  Popconfirm,
   Row,
   Segmented,
   Select,
@@ -43,7 +42,6 @@ import {
   effectiveState,
   enqueueMutation,
   getDelivery,
-  markTombstone,
   upsertServerSnapshot,
 } from '../../services/deliveries';
 import { runSync } from '../../services/sync';
@@ -370,47 +368,6 @@ export default function KppPage() {
       message.success('Приёмка сохранена');
       void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
       navigate('/kpp?tab=accepted');
-    },
-    onError: (err: Error) => message.error(err.message),
-  });
-
-  const cancel = useMutation({
-    mutationFn: async () => {
-      if (!deliveryId) return;
-      const dbi = await db();
-      const local = await dbi.get('deliveries', deliveryId);
-
-      // Черновик, который ни разу не уехал на сервер — чистим только локально.
-      if (!local || local.server === null) {
-        // Удаляем связанные фото и pending-мутации
-        const photoIds = (
-          await dbi.transaction('photos').store.index('byDelivery').getAll(deliveryId)
-        ).map((p) => p.id);
-        const mutationIds = (
-          await dbi.transaction('mutations').store.index('byEntity').getAll(deliveryId)
-        ).map((m) => m.id);
-        const tx = dbi.transaction(['deliveries', 'photos', 'mutations'], 'readwrite');
-        for (const pid of photoIds) await tx.objectStore('photos').delete(pid);
-        for (const mid of mutationIds) await tx.objectStore('mutations').delete(mid);
-        await tx.objectStore('deliveries').delete(deliveryId);
-        await tx.done;
-        return;
-      }
-
-      await markTombstone(deliveryId);
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'delivery_delete',
-        entityId: deliveryId,
-        baseVersion: loadedDelivery?.version ?? local.version,
-        payload: null,
-      });
-      void runSync();
-    },
-    onSuccess: () => {
-      message.success('Приёмка удалена');
-      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
-      navigate('/kpp');
     },
     onError: (err: Error) => message.error(err.message),
   });
@@ -742,18 +699,13 @@ export default function KppPage() {
             gap: 8,
           }}
         >
-          <Popconfirm
-            title="Удалить эту приёмку?"
-            description="Запись и связанные фото будут удалены."
-            okText="Да, удалить"
-            cancelText="Нет"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => cancel.mutate()}
+          <Button
+            size="large"
+            style={{ flex: 1 }}
+            onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}
           >
-            <Button size="large" danger loading={cancel.isPending} style={{ flex: 1 }}>
-              Отмена
-            </Button>
-          </Popconfirm>
+            Отмена
+          </Button>
           <Tooltip title={verifyReason ?? ''} placement="top">
             <span style={{ flex: 1, display: 'inline-flex' }}>
               <Button
