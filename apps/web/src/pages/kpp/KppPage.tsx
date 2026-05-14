@@ -47,6 +47,7 @@ import {
 import { runSync } from '../../services/sync';
 import { db } from '../../lib/db';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
+import { useBreakpoint } from '../../shared/hooks/useBreakpoint';
 import { DeliveriesHistory } from './DeliveriesHistory';
 import { ExpectedUpds } from './ExpectedUpds';
 import { PhotoGallery } from './PhotoGallery';
@@ -79,6 +80,7 @@ function newKey(): string {
 
 export default function KppPage() {
   const navigate = useNavigate();
+  const isDesktop = useBreakpoint() === 'desktop';
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const deliveryId = params.get('delivery');
@@ -501,7 +503,7 @@ export default function KppPage() {
   // === Режим формы (открыта приёмка) ===
   if (deliveryId) {
     return (
-      <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: 96 }}>
+      <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: isDesktop ? 0 : 96 }}>
         <Space style={{ width: '100%' }} align="center">
           {fromAccepted && (
             <Button
@@ -685,42 +687,74 @@ export default function KppPage() {
           )}
         </Card>
 
-        <div
-          style={{
-            position: 'fixed',
-            left: 0,
-            right: 0,
-            bottom: 0,
-            padding: 12,
-            background: '#fff',
-            borderTop: '1px solid #f0f0f0',
-            zIndex: 100,
-            display: 'flex',
-            gap: 8,
-          }}
-        >
-          <Button
-            size="large"
-            style={{ flex: 1 }}
-            onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}
+        {isDesktop ? (
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              marginTop: 8,
+              padding: '12px 0',
+              background: '#f5f5f5',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 8,
+              zIndex: 5,
+            }}
           >
-            Отмена
-          </Button>
-          <Tooltip title={verifyReason ?? ''} placement="top">
-            <span style={{ flex: 1, display: 'inline-flex' }}>
-              <Button
-                type="primary"
-                size="large"
-                style={{ flex: 1 }}
-                loading={save.isPending}
-                disabled={!!verifyReason}
-                onClick={() => save.mutate()}
-              >
-                Сохранить
-              </Button>
-            </span>
-          </Tooltip>
-        </div>
+            <Button onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}>
+              Отмена
+            </Button>
+            <Tooltip title={verifyReason ?? ''} placement="top">
+              <span style={{ display: 'inline-flex' }}>
+                <Button
+                  type="primary"
+                  loading={save.isPending}
+                  disabled={!!verifyReason}
+                  onClick={() => save.mutate()}
+                >
+                  Сохранить
+                </Button>
+              </span>
+            </Tooltip>
+          </div>
+        ) : (
+          <div
+            style={{
+              position: 'fixed',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              padding: 12,
+              background: '#fff',
+              borderTop: '1px solid #f0f0f0',
+              zIndex: 100,
+              display: 'flex',
+              gap: 8,
+            }}
+          >
+            <Button
+              size="large"
+              style={{ flex: 1 }}
+              onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}
+            >
+              Отмена
+            </Button>
+            <Tooltip title={verifyReason ?? ''} placement="top">
+              <span style={{ flex: 1, display: 'inline-flex' }}>
+                <Button
+                  type="primary"
+                  size="large"
+                  style={{ flex: 1 }}
+                  loading={save.isPending}
+                  disabled={!!verifyReason}
+                  onClick={() => save.mutate()}
+                >
+                  Сохранить
+                </Button>
+              </span>
+            </Tooltip>
+          </div>
+        )}
       </Space>
     );
   }
