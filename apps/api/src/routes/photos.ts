@@ -3,13 +3,14 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import {
+  PhotoDeleteResponseSchema,
   PhotoGetUrlResponseSchema,
   PhotoPresignRequestSchema,
   PhotoPresignResponseSchema,
   ErrorResponseSchema,
 } from '@matcheck/contracts';
 import { deliveries, deliveryPhotos } from '../db/schema.js';
-import { presign } from '../domain/storage/s3.signer.js';
+import { deleteObject, presign } from '../domain/storage/s3.signer.js';
 import { publishEvent } from './events.js';
 
 const URL_TTL = 300; // 5 min
@@ -149,6 +150,50 @@ export async function photoRoutes(rawApp: FastifyInstance): Promise<void> {
       } catch {
         return reply.code(500).send({ error: 's3_unavailable', message: 'S3 not configured' });
       }
+    },
+  );
+
+  app.delete(
+    '/api/v1/photos/:id',
+    {
+      preHandler: [app.authenticate, app.authorize('admin')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: {
+          200: PhotoDeleteResponseSchema,
+          404: ErrorResponseSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const [p] = await app.db
+        .select({
+          s3Key: deliveryPhotos.s3Key,
+          thumbS3Key: deliveryPhotos.thumbS3Key,
+          deliveryId: deliveryPhotos.deliveryId,
+        })
+        .from(deliveryPhotos)
+        .where(eq(deliveryPhotos.id, req.params.id))
+        .limit(1);
+      if (!p) return reply.code(404).send({ error: 'not_found' });
+
+      await app.db.delete(deliveryPhotos).where(eq(deliveryPhotos.id, req.params.id));
+
+      await deleteObject(p.s3Key).catch((err) =>
+        app.log.warn({ err, key: p.s3Key }, 's3 delete failed'),
+      );
+      if (p.thumbS3Key) {
+        await deleteObject(p.thumbS3Key).catch((err) =>
+          app.log.warn({ err, key: p.thumbS3Key }, 's3 thumb delete failed'),
+        );
+      }
+
+      publishEvent(app, {
+        type: 'delivery_updated',
+        id: p.deliveryId,
+        ts: new Date().toISOString(),
+      });
+      return { ok: true as const };
     },
   );
 }

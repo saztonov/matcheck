@@ -48,6 +48,7 @@ import { db } from '../../lib/db';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
 import { DeliveriesHistory } from './DeliveriesHistory';
 import { ExpectedUpds } from './ExpectedUpds';
+import { PhotoGallery } from './PhotoGallery';
 
 type DraftItem = {
   clientKey: string;
@@ -564,6 +565,7 @@ export default function KppPage() {
 
         <Collapse
           size="small"
+          defaultActiveKey={photosCount > 0 ? ['photos'] : []}
           items={[
             {
               key: 'comment',
@@ -580,16 +582,24 @@ export default function KppPage() {
               key: 'photos',
               label: `Фото${photosCount ? ` (${photosCount})` : ''}`,
               children: (
-                <Space wrap>
-                  <Upload {...photoProps}>
-                    <Button size="large" icon={<CameraOutlined />}>
-                      Снять фото
-                    </Button>
-                  </Upload>
-                  {photosCount === 0 && (
-                    <Typography.Text type="secondary">
-                      Хотя бы одно фото нужно для сохранения.
-                    </Typography.Text>
+                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Upload {...photoProps}>
+                      <Button size="large" icon={<CameraOutlined />}>
+                        Снять фото
+                      </Button>
+                    </Upload>
+                    {photosCount === 0 && (
+                      <Typography.Text type="secondary">
+                        Хотя бы одно фото нужно для сохранения.
+                      </Typography.Text>
+                    )}
+                  </Space>
+                  {deliveryId && loadedDelivery && (
+                    <PhotoGallery
+                      deliveryId={deliveryId}
+                      photos={loadedDelivery.photos}
+                    />
                   )}
                 </Space>
               ),

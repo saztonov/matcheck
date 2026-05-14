@@ -30,3 +30,7 @@ export const PhotoGetUrlResponseSchema = z.object({
   url: z.string(),
   expiresIn: z.number(),
 });
+export type PhotoGetUrlResponse = z.infer<typeof PhotoGetUrlResponseSchema>;
+
+export const PhotoDeleteResponseSchema = z.object({ ok: z.literal(true) });
+export type PhotoDeleteResponse = z.infer<typeof PhotoDeleteResponseSchema>;

@@ -46,6 +46,7 @@ import {
   PhotoPresignRequestSchema,
   PhotoPresignResponseSchema,
   PhotoGetUrlResponseSchema,
+  PhotoDeleteResponseSchema,
   PhotoKindSchema,
 } from '../photos.js';
 import { SyncDeltaResponseSchema, SseEventSchema } from '../sync.js';
@@ -106,6 +107,7 @@ const PhotoKind = registry.register('PhotoKind', PhotoKindSchema);
 const PhotoPresignRequest = registry.register('PhotoPresignRequest', PhotoPresignRequestSchema);
 const PhotoPresignResponse = registry.register('PhotoPresignResponse', PhotoPresignResponseSchema);
 const PhotoGetUrlResponse = registry.register('PhotoGetUrlResponse', PhotoGetUrlResponseSchema);
+const PhotoDeleteResponse = registry.register('PhotoDeleteResponse', PhotoDeleteResponseSchema);
 
 const Counterparty = registry.register('Counterparty', CounterpartySchema);
 const CounterpartyListResponse = registry.register(
@@ -541,6 +543,27 @@ registry.registerPath({
       content: { 'application/json': { schema: PhotoGetUrlResponse } },
     },
     401: errorRefs[401],
+    404: errResp('Фото не найдено'),
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/v1/photos/{id}',
+  tags: ['Photos'],
+  summary: 'Удалить фото (только admin)',
+  description:
+    'Удаляет запись из delivery_photos и связанные объекты в S3 (основной + thumb). ' +
+    'Доступно только пользователям с ролью admin. Ошибки S3 не валят запрос — логируются.',
+  security: bearer,
+  request: { params: z.object({ id: z.string().uuid() }) },
+  responses: {
+    200: {
+      description: 'Фото удалено',
+      content: { 'application/json': { schema: PhotoDeleteResponse } },
+    },
+    401: errorRefs[401],
+    403: errorRefs[403],
     404: errResp('Фото не найдено'),
   },
 });
