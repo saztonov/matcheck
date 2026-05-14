@@ -149,6 +149,12 @@ vite.config.ts.timestamp-*
 apps/web/dev-dist/
 apps/web/public/sw.js
 apps/web/public/workbox-*.js
+# PWA-иконки генерируются `pnpm generate-pwa-assets` (исходник — favicon.svg),
+# в Docker build-stage делается то же самое, в репо их хранить не нужно.
+apps/web/public/pwa-*.png
+apps/web/public/apple-touch-icon-*.png
+apps/web/public/maskable-icon-*.png
+apps/web/public/favicon.ico
 
 # OS
 .DS_Store

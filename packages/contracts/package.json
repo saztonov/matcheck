@@ -9,9 +9,14 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:openapi": "tsx scripts/gen-openapi.ts"
   },
   "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^7.3.4",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
   }
 }

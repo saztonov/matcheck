@@ -1,0 +1,56 @@
+name: contracts-drift
+
+# Гарантирует, что packages/contracts/openapi.json всегда соответствует
+# Zod-схемам. Если кто-то поменял .ts-схемы, но не перегенерировал openapi.json
+# (pnpm --filter @matcheck/contracts gen:openapi) — этот job упадёт.
+#
+# Артефакт openapi.json — точка контакта с внешними клиентами (Android и др.),
+# поэтому drift недопустим.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/contracts/**'
+      - '.github/workflows/contracts-drift.yml'
+  pull_request:
+    paths:
+      - 'packages/contracts/**'
+      - '.github/workflows/contracts-drift.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck contracts
+        run: pnpm --filter @matcheck/contracts typecheck
+
+      - name: Regenerate openapi.json
+        run: pnpm --filter @matcheck/contracts gen:openapi
+
+      - name: Verify no drift
+        run: |
+          if ! git diff --exit-code packages/contracts/openapi.json; then
+            echo ""
+            echo "::error::openapi.json не соответствует Zod-схемам."
+            echo "::error::Выполните локально: pnpm --filter @matcheck/contracts gen:openapi"
+            echo "::error::и закоммитьте обновлённый packages/contracts/openapi.json."
+            exit 1
+          fi
+
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@latest lint packages/contracts/openapi.json --max-problems=0 --skip-rule no-unused-components || true

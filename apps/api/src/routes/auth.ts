@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { asZod } from '../lib/fastify.js';
 import {
@@ -50,6 +50,24 @@ async function backoffSleep(failed: number) {
   if (failed <= 0) return;
   const ms = Math.min(30_000, 1000 * 2 ** Math.min(failed - 1, 5));
   await new Promise((r) => setTimeout(r, ms));
+}
+
+// Mobile-клиенты (Android/iOS) не могут хранить HttpOnly-cookie между запросами,
+// поэтому при заголовке X-Client-Type: mobile отдаём refresh-token в теле ответа
+// и не ставим cookies. Веб остаётся на cookie-flow без изменений.
+function isMobileClient(req: FastifyRequest): boolean {
+  return req.headers['x-client-type'] === 'mobile';
+}
+
+function refreshExpiresInSeconds(expiresAt: Date): number {
+  return Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+}
+
+function extractBearerToken(authHeader: string | undefined): string | null {
+  if (!authHeader) return null;
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+  const token = m?.[1]?.trim();
+  return token && token.length > 0 ? token : null;
 }
 
 export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
@@ -195,6 +213,16 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
         aal: 'aal1',
       });
 
+      if (isMobileClient(req)) {
+        return {
+          accessToken: access,
+          expiresIn: env.ACCESS_TOKEN_TTL_SECONDS,
+          user: userToDto(user),
+          refreshToken: refresh.token,
+          refreshExpiresIn: refreshExpiresInSeconds(refresh.expiresAt),
+        };
+      }
+
       reply.setCookie(REFRESH_COOKIE_NAME, refresh.token, refreshCookieOptions());
       reply.setCookie(ACCESS_COOKIE_NAME, access, accessCookieOptions());
       return {
@@ -212,7 +240,10 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
       schema: { response: { 200: RefreshResponseSchema, 401: ErrorResponseSchema } },
     },
     async (req, reply) => {
-      const presented = req.cookies[REFRESH_COOKIE_NAME];
+      const mobile = isMobileClient(req);
+      const presented = mobile
+        ? extractBearerToken(req.headers.authorization)
+        : req.cookies[REFRESH_COOKIE_NAME];
       if (!presented) {
         return reply.code(401).send({ error: 'no_refresh' });
       }
@@ -222,8 +253,10 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
         req.headers['user-agent'] ?? undefined,
       );
       if (!result) {
-        reply.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
-        reply.clearCookie(REFRESH_COOKIE_NAME, legacyRefreshCookieOptions());
+        if (!mobile) {
+          reply.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+          reply.clearCookie(REFRESH_COOKIE_NAME, legacyRefreshCookieOptions());
+        }
         return reply.code(401).send({ error: 'invalid_refresh' });
       }
       const [user] = await app.db
@@ -239,6 +272,16 @@ export async function authRoutes(rawApp: FastifyInstance): Promise<void> {
         sid: result.sessionId,
         aal: 'aal1',
       });
+
+      if (mobile) {
+        return {
+          accessToken: access,
+          expiresIn: env.ACCESS_TOKEN_TTL_SECONDS,
+          refreshToken: result.newToken,
+          refreshExpiresIn: refreshExpiresInSeconds(result.expiresAt),
+        };
+      }
+
       reply.clearCookie(REFRESH_COOKIE_NAME, legacyRefreshCookieOptions());
       reply.setCookie(REFRESH_COOKIE_NAME, result.newToken, refreshCookieOptions());
       reply.setCookie(ACCESS_COOKIE_NAME, access, accessCookieOptions());

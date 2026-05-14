@@ -32,12 +32,18 @@ export const LoginResponseSchema = z.object({
   accessToken: z.string(),
   expiresIn: z.number(),
   user: UserDtoSchema,
+  // Возвращаются только мобильным клиентам (X-Client-Type: mobile).
+  // Веб использует HttpOnly-cookie и эти поля игнорирует.
+  refreshToken: z.string().optional(),
+  refreshExpiresIn: z.number().optional(),
 });
 export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 
 export const RefreshResponseSchema = z.object({
   accessToken: z.string(),
   expiresIn: z.number(),
+  refreshToken: z.string().optional(),
+  refreshExpiresIn: z.number().optional(),
 });
 export type RefreshResponse = z.infer<typeof RefreshResponseSchema>;
 
