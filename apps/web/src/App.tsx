@@ -20,7 +20,7 @@ function SideEffects() {
   useEffect(() => {
     if (!user) return;
     const teardownInv = setupInvalidation(qc);
-    const teardownSync = startSyncLoop(5 * 60 * 1000);
+    const teardownSync = startSyncLoop();
     return () => {
       teardownInv();
       teardownSync();

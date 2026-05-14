@@ -125,12 +125,15 @@ export async function retryPendingUploads(): Promise<void> {
   const dbi = await db();
   const all = await dbi.getAll('photos');
   for (const p of all) {
-    if (!p.uploaded) {
-      try {
-        await uploadPhoto(p.id);
-      } catch {
-        /* ignore */
-      }
+    if (p.uploaded) continue;
+    // Delivery должен быть уже на сервере, иначе /photos/presign даст 404.
+    // Ждём следующего прохода runSync после успешного push delivery_upsert.
+    const dlv = await dbi.get('deliveries', p.deliveryId);
+    if (!dlv || dlv.server === null) continue;
+    try {
+      await uploadPhoto(p.id);
+    } catch {
+      /* ignore */
     }
   }
 }

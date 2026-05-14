@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png'],
       manifest: {
         name: 'matcheck — приёмка материалов',
         short_name: 'matcheck',
@@ -18,10 +18,15 @@ export default defineConfig({
         lang: 'ru',
         start_url: '/',
         icons: [
-          // TODO: добавить PNG-иконки 192/512/512-maskable для полной поддержки PWA-install.
-          // Пока используется SVG-фавикон — работает в Chrome/Edge, но iOS требует PNG.
-          { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml' },
-          { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+          { src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+          {
+            src: 'maskable-icon-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
         ],
       },
       workbox: {

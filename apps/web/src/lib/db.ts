@@ -12,7 +12,7 @@ export type DeliveryRecord = {
 
 export type MutationRecord = {
   id: string;
-  kind: 'delivery_upsert' | 'delivery_delete' | 'photo_upload';
+  kind: 'delivery_upsert' | 'delivery_delete';
   entityId: string;
   baseVersion: number;
   payload: unknown;

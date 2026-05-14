@@ -29,12 +29,22 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Delivery,
   DeliveryStatusCode,
-  DeliveryUpsert,
   SourceDocument,
   SourceDocumentDetail,
+  Status,
 } from '@matcheck/contracts';
 import { api } from '../../services/api';
 import { capturePhoto } from '../../services/photoPipeline';
+import {
+  applyLocalEdit,
+  effectiveState,
+  enqueueMutation,
+  getDelivery,
+  markTombstone,
+  upsertServerSnapshot,
+} from '../../services/deliveries';
+import { runSync } from '../../services/sync';
+import { db } from '../../lib/db';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
 import { DeliveriesHistory } from './DeliveriesHistory';
 import { ExpectedUpds } from './ExpectedUpds';
@@ -87,7 +97,35 @@ export default function KppPage() {
 
   const deliveryQuery = useQuery({
     queryKey: ['deliveries', deliveryId],
-    queryFn: () => api.get<Delivery>(`/deliveries/${deliveryId}`),
+    queryFn: async (): Promise<Delivery> => {
+      if (!deliveryId) throw new Error('no delivery id');
+      try {
+        const remote = await api.get<Delivery>(`/deliveries/${deliveryId}`);
+        await upsertServerSnapshot([remote]);
+        return remote;
+      } catch (err) {
+        // Offline или 404 — отдаём локальный snapshot, если он есть
+        const local = await getDelivery(deliveryId);
+        const eff = local ? effectiveState(local) : null;
+        if (eff) return eff;
+        throw err;
+      }
+    },
+    enabled: !!deliveryId,
+  });
+
+  // Черновик (server === null) не имеет photos в effectiveState — считаем локально
+  const photosCountQuery = useQuery({
+    queryKey: ['photos-count', deliveryId],
+    queryFn: async () => {
+      if (!deliveryId) return 0;
+      const dbi = await db();
+      const all = await dbi
+        .transaction('photos')
+        .store.index('byDelivery')
+        .getAll(deliveryId);
+      return all.length;
+    },
     enabled: !!deliveryId,
   });
 
@@ -116,18 +154,25 @@ export default function KppPage() {
     }
   }, [deliveryQuery.data, selectedUpd]);
 
-  /** Создаёт пустую приёмку — uuid выдаётся сервером, чтобы можно было сразу делать фото. */
+  /**
+   * Создаёт пустую приёмку. UUID генерируется на клиенте, запись сразу появляется
+   * в IndexedDB, а мутация уезжает на сервер через runSync (best-effort, может догнаться позже).
+   */
   const createBlank = async () => {
     if (creating) return;
     setCreating(true);
     try {
-      const payload: DeliveryUpsert = {
-        statusCode: 'not_filled',
-        sourceDocumentIds: [],
-        items: [],
-      };
-      const created = await api.post<Delivery>('/deliveries', payload);
-      navigate(`/kpp?delivery=${created.id}`);
+      const id = crypto.randomUUID();
+      await applyLocalEdit(id, {});
+      await enqueueMutation({
+        id: crypto.randomUUID(),
+        kind: 'delivery_upsert',
+        entityId: id,
+        baseVersion: 0,
+        payload: null,
+      });
+      void runSync();
+      navigate(`/kpp?delivery=${id}`);
     } catch (err) {
       message.error(`Не удалось создать приёмку: ${(err as Error).message}`);
     } finally {
@@ -135,27 +180,49 @@ export default function KppPage() {
     }
   };
 
-  /** Создаёт приёмку по выбранному УПД — подгружаются позиции, сразу записываются на сервер. */
+  /**
+   * Создаёт приёмку по выбранному УПД. Детали УПД читаются из локального кеша (его наполняет
+   * pullSync); при offline и пустом кеше — ошибка. UUID клиентский, мутация уезжает асинхронно.
+   */
   const createFromUpd = async (upd: SourceDocument) => {
     if (creating) return;
     setCreating(true);
     try {
-      const detail = await api.get<SourceDocumentDetail>(`/source-documents/${upd.id}`);
-      const payload: DeliveryUpsert = {
-        statusCode: 'not_filled',
+      const dbi = await db();
+      let detail = await dbi.get('source_documents', upd.id);
+      if (!detail) {
+        try {
+          detail = await api.get<SourceDocumentDetail>(`/source-documents/${upd.id}`);
+        } catch {
+          message.error('Нет связи и детали УПД ещё не загружены — попробуйте позже');
+          return;
+        }
+      }
+      const id = crypto.randomUUID();
+      const patch: Partial<Delivery> = {
         supplierId: detail.supplierId ?? null,
         sourceDocumentIds: [upd.id],
         items: detail.items.map((it, i) => ({
-          lineNo: i + 1,
+          id: crypto.randomUUID(),
+          materialId: it.materialId ?? null,
           nameRaw: it.nameRaw,
           qtyPlanned: it.qty,
           qtyActual: it.qty,
           unit: it.unit,
-          materialId: it.materialId ?? null,
+          comment: null,
+          lineNo: i + 1,
         })),
       };
-      const created = await api.post<Delivery>('/deliveries', payload);
-      navigate(`/kpp?delivery=${created.id}`);
+      await applyLocalEdit(id, patch);
+      await enqueueMutation({
+        id: crypto.randomUUID(),
+        kind: 'delivery_upsert',
+        entityId: id,
+        baseVersion: 0,
+        payload: null,
+      });
+      void runSync();
+      navigate(`/kpp?delivery=${id}`);
     } catch (err) {
       message.error(`Не удалось открыть УПД: ${(err as Error).message}`);
     } finally {
@@ -172,8 +239,13 @@ export default function KppPage() {
       try {
         await capturePhoto(deliveryId, file, 'cargo');
         message.success('Фото добавлено');
-        // обновим список фото в loadedDelivery
-        await queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] });
+        // Локальный счётчик фото — invalidate на photos-count.
+        // Photos попадут в Delivery.photos после успешного upload + следующего pullSync.
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['photos-count', deliveryId] }),
+          queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] }),
+        ]);
+        void runSync();
       } catch (err) {
         message.error(`Не удалось добавить фото: ${(err as Error).message}`);
       }
@@ -209,10 +281,13 @@ export default function KppPage() {
   const save = useMutation({
     mutationFn: async () => {
       if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
-      const payload: DeliveryUpsert = {
-        id: loadedDelivery.id,
-        baseVersion: loadedDelivery.version,
-        statusCode: 'filled' satisfies DeliveryStatusCode,
+      // Локальный patch: status.code = 'filled' (полный Status придёт с сервера в pullSync).
+      const nextStatus: Status = {
+        ...loadedDelivery.status,
+        code: 'filled' satisfies DeliveryStatusCode,
+      };
+      const patch: Partial<Delivery> = {
+        status: nextStatus,
         supplierId: selectedUpd?.supplierId ?? loadedDelivery.supplierId ?? null,
         vehiclePlate: plate || null,
         arrivedAt: loadedDelivery.arrivedAt ?? new Date().toISOString(),
@@ -223,15 +298,25 @@ export default function KppPage() {
         items: items
           .filter((i) => i.nameRaw.trim().length > 0)
           .map((i) => ({
-            lineNo: i.lineNo,
+            id: crypto.randomUUID(),
+            materialId: i.materialId,
             nameRaw: i.nameRaw,
             qtyPlanned: i.qtyPlanned,
             qtyActual: i.qtyActual,
             unit: i.unit,
-            materialId: i.materialId,
+            comment: null,
+            lineNo: i.lineNo,
           })),
       };
-      return api.post<Delivery>('/deliveries', payload);
+      await applyLocalEdit(loadedDelivery.id, patch);
+      await enqueueMutation({
+        id: crypto.randomUUID(),
+        kind: 'delivery_upsert',
+        entityId: loadedDelivery.id,
+        baseVersion: loadedDelivery.version,
+        payload: null,
+      });
+      void runSync();
     },
     onSuccess: () => {
       message.success('Приёмка сохранена');
@@ -244,7 +329,35 @@ export default function KppPage() {
   const cancel = useMutation({
     mutationFn: async () => {
       if (!deliveryId) return;
-      await api.delete(`/deliveries/${deliveryId}`);
+      const dbi = await db();
+      const local = await dbi.get('deliveries', deliveryId);
+
+      // Черновик, который ни разу не уехал на сервер — чистим только локально.
+      if (!local || local.server === null) {
+        // Удаляем связанные фото и pending-мутации
+        const photoIds = (
+          await dbi.transaction('photos').store.index('byDelivery').getAll(deliveryId)
+        ).map((p) => p.id);
+        const mutationIds = (
+          await dbi.transaction('mutations').store.index('byEntity').getAll(deliveryId)
+        ).map((m) => m.id);
+        const tx = dbi.transaction(['deliveries', 'photos', 'mutations'], 'readwrite');
+        for (const pid of photoIds) await tx.objectStore('photos').delete(pid);
+        for (const mid of mutationIds) await tx.objectStore('mutations').delete(mid);
+        await tx.objectStore('deliveries').delete(deliveryId);
+        await tx.done;
+        return;
+      }
+
+      await markTombstone(deliveryId);
+      await enqueueMutation({
+        id: crypto.randomUUID(),
+        kind: 'delivery_delete',
+        entityId: deliveryId,
+        baseVersion: loadedDelivery?.version ?? local.version,
+        payload: null,
+      });
+      void runSync();
     },
     onSuccess: () => {
       message.success('Приёмка удалена');
@@ -254,7 +367,11 @@ export default function KppPage() {
     onError: (err: Error) => message.error(err.message),
   });
 
-  const photosCount = loadedDelivery?.photos.length ?? 0;
+  // Берём максимум: локальные (включая черновик, ещё не на сервере) или server-snapshot.
+  const photosCount = Math.max(
+    photosCountQuery.data ?? 0,
+    loadedDelivery?.photos.length ?? 0,
+  );
   const verifyReason: string | null = (() => {
     const reasons: string[] = [];
     if (!plate.trim()) reasons.push('Заполните госномер');

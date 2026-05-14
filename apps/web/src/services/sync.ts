@@ -4,6 +4,7 @@ import { db } from '../lib/db';
 import { upsertServerSnapshot, buildUpsertPayload } from './deliveries';
 import { getSetting, setSetting } from '../lib/db';
 import { useAuthStore } from '../stores/auth';
+import { retryPendingUploads } from './photoPipeline';
 
 const CURSOR_KEY = 'sync_cursor';
 const RUNNING = { value: false };
@@ -81,6 +82,9 @@ export async function runSync(): Promise<void> {
   try {
     await pushPendingMutations();
     await pullSync();
+    // После push+pull часть фото может быть готова к загрузке
+    // (delivery теперь существует на сервере — /photos/presign не даст 404).
+    await retryPendingUploads();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       // session expired — store уже помечен expireSession(); ProtectedRoute
@@ -99,8 +103,18 @@ export function startSyncLoop(intervalMs = 60_000): () => void {
   if (intervalHandle) clearInterval(intervalHandle);
   void runSync();
   intervalHandle = window.setInterval(() => void runSync(), intervalMs);
+
+  const onOnline = () => void runSync();
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') void runSync();
+  };
+  window.addEventListener('online', onOnline);
+  document.addEventListener('visibilitychange', onVisibility);
+
   return () => {
     if (intervalHandle) clearInterval(intervalHandle);
     intervalHandle = null;
+    window.removeEventListener('online', onOnline);
+    document.removeEventListener('visibilitychange', onVisibility);
   };
 }
