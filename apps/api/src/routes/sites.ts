@@ -17,7 +17,7 @@ const ListQuerySchema = z.object({
     .union([z.literal('true'), z.literal('false'), z.boolean()])
     .optional()
     .transform((v) => v === true || v === 'true'),
-  limit: z.coerce.number().int().positive().max(200).default(100),
+  limit: z.coerce.number().int().positive().max(500).default(100),
   offset: z.coerce.number().int().nonnegative().default(0),
 });
 

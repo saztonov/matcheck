@@ -13,7 +13,7 @@ import { counterparties } from '../db/schema.js';
 const ListQuerySchema = z.object({
   q: z.string().optional(),
   role: z.enum(['supplier', 'customer', 'contractor']).optional(),
-  limit: z.coerce.number().int().positive().max(200).default(50),
+  limit: z.coerce.number().int().positive().max(500).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
 });
 
