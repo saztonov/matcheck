@@ -23,7 +23,6 @@ import type { TableProps, UploadProps } from 'antd';
 import {
   ArrowLeftOutlined,
   CameraOutlined,
-  DeleteOutlined,
   PlusOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -321,12 +320,6 @@ export default function KppPage() {
     ]);
   };
 
-  const removeItem = (key: string) => {
-    setItems((prev) =>
-      prev.filter((it) => it.clientKey !== key).map((it, i) => ({ ...it, lineNo: i + 1 })),
-    );
-  };
-
   const save = useMutation({
     mutationFn: async () => {
       if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
@@ -488,38 +481,13 @@ export default function KppPage() {
           />
         ),
       },
-      {
-        title: '',
-        width: 60,
-        align: 'right',
-        render: (_: unknown, r: DraftItem) => (
-          <Popconfirm
-            title="Удалить материал?"
-            okText="Да"
-            cancelText="Нет"
-            onConfirm={() => removeItem(r.clientKey)}
-          >
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        ),
-      },
     ],
     [],
   );
 
   const cardRender = (r: DraftItem) => (
     <div style={{ width: '100%' }}>
-      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-        <Typography.Text strong>№{r.lineNo}</Typography.Text>
-        <Popconfirm
-          title="Удалить материал?"
-          okText="Да"
-          cancelText="Нет"
-          onConfirm={() => removeItem(r.clientKey)}
-        >
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      </Space>
+      <Typography.Text strong>№{r.lineNo}</Typography.Text>
       <Input.TextArea
         autoSize={{ minRows: 1, maxRows: 4 }}
         value={r.nameRaw}
@@ -748,7 +716,6 @@ export default function KppPage() {
                 items={items}
                 deliveryId={deliveryId}
                 onChange={(key, patch) => updateField(key, patch as Partial<DraftItem>)}
-                onRemove={removeItem}
               />
             </div>
           ) : (

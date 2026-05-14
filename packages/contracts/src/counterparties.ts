@@ -16,7 +16,7 @@ export const CounterpartySchema = z.object({
   isSelf: z.boolean(),
   isSupplier: z.boolean(),
   isCustomer: z.boolean(),
-  isCarrier: z.boolean(),
+  isContractor: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -30,7 +30,7 @@ export const CounterpartyUpsertSchema = z.object({
   isSelf: z.boolean().optional(),
   isSupplier: z.boolean().optional(),
   isCustomer: z.boolean().optional(),
-  isCarrier: z.boolean().optional(),
+  isContractor: z.boolean().optional(),
 });
 export type CounterpartyUpsert = z.infer<typeof CounterpartyUpsertSchema>;
 

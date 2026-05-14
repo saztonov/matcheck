@@ -3,7 +3,6 @@ import {
   Button,
   Drawer,
   Input,
-  Popconfirm,
   Space,
   Steps,
   Typography,
@@ -11,7 +10,6 @@ import {
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
-  DeleteOutlined,
 } from '@ant-design/icons';
 import { GroupSummaryHeader, type GroupSummary } from './GroupSummaryHeader';
 import { QtyStepper } from './QtyStepper';
@@ -25,7 +23,6 @@ type Props = {
   initialGroupKey: string | null;
   onClose: () => void;
   onChange: (clientKey: string, patch: Partial<GroupableItem>) => void;
-  onRemove: (clientKey: string) => void;
 };
 
 const trim = (s: string | null) => (s == null ? '—' : s.replace(/\.?0+$/, '') || '0');
@@ -36,7 +33,6 @@ export function GroupDrawer({
   initialGroupKey,
   onClose,
   onChange,
-  onRemove,
 }: Props) {
   const [activeIdx, setActiveIdx] = useState(0);
 
@@ -99,17 +95,7 @@ export function GroupDrawer({
                 border: '1px solid #f0f0f0',
               }}
             >
-              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                <Typography.Text strong>№{it.lineNo}</Typography.Text>
-                <Popconfirm
-                  title="Удалить материал?"
-                  okText="Да"
-                  cancelText="Нет"
-                  onConfirm={() => onRemove(it.clientKey)}
-                >
-                  <Button size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
-              </Space>
+              <Typography.Text strong>№{it.lineNo}</Typography.Text>
               <Input.TextArea
                 autoSize={{ minRows: 1, maxRows: 4 }}
                 value={it.nameRaw}

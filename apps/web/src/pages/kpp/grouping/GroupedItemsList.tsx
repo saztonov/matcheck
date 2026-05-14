@@ -1,17 +1,15 @@
 import { useMemo, useState } from 'react';
 import {
-  Button,
   Card,
   Collapse,
   Input,
   InputNumber,
-  Popconfirm,
   Space,
   Table,
   Typography,
   type TableProps,
 } from 'antd';
-import { DeleteOutlined, RightOutlined } from '@ant-design/icons';
+import { RightOutlined } from '@ant-design/icons';
 import { useBreakpoint } from '../../../shared/hooks/useBreakpoint';
 import { GroupSummaryHeader, type GroupSummary } from './GroupSummaryHeader';
 import { GroupDrawer } from './GroupDrawer';
@@ -80,10 +78,9 @@ type Props = {
   items: GroupableItem[];
   deliveryId: string | null;
   onChange: (clientKey: string, patch: Partial<GroupableItem>) => void;
-  onRemove: (clientKey: string) => void;
 };
 
-export function GroupedItemsList({ items, deliveryId, onChange, onRemove }: Props) {
+export function GroupedItemsList({ items, deliveryId, onChange }: Props) {
   const bp = useBreakpoint();
   const groups = useMemo(() => buildGroups(items), [items]);
   const { expanded, setExpanded } = useExpandedGroups(deliveryId);
@@ -116,7 +113,6 @@ export function GroupedItemsList({ items, deliveryId, onChange, onRemove }: Prop
           initialGroupKey={drawerKey}
           onClose={() => setDrawerKey(null)}
           onChange={onChange}
-          onRemove={onRemove}
         />
       </>
     );
@@ -131,7 +127,7 @@ export function GroupedItemsList({ items, deliveryId, onChange, onRemove }: Prop
       items={groups.map((g) => ({
         key: g.key,
         label: <GroupSummaryHeader group={g.summary} />,
-        children: <GroupTable items={g.items} onChange={onChange} onRemove={onRemove} />,
+        children: <GroupTable items={g.items} onChange={onChange} />,
       }))}
     />
   );
@@ -140,11 +136,9 @@ export function GroupedItemsList({ items, deliveryId, onChange, onRemove }: Prop
 function GroupTable({
   items,
   onChange,
-  onRemove,
 }: {
   items: GroupableItem[];
   onChange: (clientKey: string, patch: Partial<GroupableItem>) => void;
-  onRemove: (clientKey: string) => void;
 }) {
   const columns: NonNullable<TableProps<GroupableItem>['columns']> = [
     { title: '№', dataIndex: 'lineNo', width: 56 },
@@ -193,21 +187,6 @@ function GroupTable({
           value={r.unit}
           onChange={(e) => onChange(r.clientKey, { unit: e.target.value })}
         />
-      ),
-    },
-    {
-      title: '',
-      width: 60,
-      align: 'right',
-      render: (_: unknown, r: GroupableItem) => (
-        <Popconfirm
-          title="Удалить материал?"
-          okText="Да"
-          cancelText="Нет"
-          onConfirm={() => onRemove(r.clientKey)}
-        >
-          <Button size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
       ),
     },
   ];

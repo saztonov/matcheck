@@ -156,7 +156,7 @@ export const counterparties = pgTable(
     isSelf: boolean('is_self').notNull().default(false),
     isSupplier: boolean('is_supplier').notNull().default(false),
     isCustomer: boolean('is_customer').notNull().default(false),
-    isCarrier: boolean('is_carrier').notNull().default(false),
+    isContractor: boolean('is_contractor').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -170,9 +170,9 @@ export const counterparties = pgTable(
     index('counterparty_supplier_idx')
       .on(t.name)
       .where(sql`${t.isSupplier}`),
-    index('counterparty_carrier_idx')
+    index('counterparty_contractor_idx')
       .on(t.name)
-      .where(sql`${t.isCarrier}`),
+      .where(sql`${t.isContractor}`),
   ],
 );
 

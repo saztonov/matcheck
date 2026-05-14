@@ -71,7 +71,7 @@ export default function CounterpartiesPage() {
                 {r.isSelf && <Tag color="purple">Наш</Tag>}
                 {r.isSupplier && <Tag color="blue">Поставщик</Tag>}
                 {r.isCustomer && <Tag color="green">Заказчик</Tag>}
-                {r.isCarrier && <Tag color="orange">Перевозчик</Tag>}
+                {r.isContractor && <Tag color="orange">Подрядчик</Tag>}
               </Space>
             ),
           },
@@ -87,7 +87,7 @@ export default function CounterpartiesPage() {
               <Space wrap>
                 {r.isSupplier && <Tag color="blue">Поставщик</Tag>}
                 {r.isCustomer && <Tag color="green">Заказчик</Tag>}
-                {r.isCarrier && <Tag color="orange">Перевозчик</Tag>}
+                {r.isContractor && <Tag color="orange">Подрядчик</Tag>}
               </Space>
             </Space>
           </Card>
@@ -133,8 +133,8 @@ export default function CounterpartiesPage() {
               <Form.Item name="isCustomer" valuePropName="checked" noStyle>
                 <Switch checkedChildren="Заказчик" unCheckedChildren="Заказчик" />
               </Form.Item>
-              <Form.Item name="isCarrier" valuePropName="checked" noStyle>
-                <Switch checkedChildren="Перевозчик" unCheckedChildren="Перевозчик" />
+              <Form.Item name="isContractor" valuePropName="checked" noStyle>
+                <Switch checkedChildren="Подрядчик" unCheckedChildren="Подрядчик" />
               </Form.Item>
               <Form.Item name="isSelf" valuePropName="checked" noStyle>
                 <Switch checkedChildren="Наша" unCheckedChildren="Наша" />

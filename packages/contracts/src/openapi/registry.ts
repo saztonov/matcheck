@@ -459,7 +459,7 @@ registry.registerPath({
   security: bearer,
   request: {
     query: z.object({
-      role: z.enum(['supplier', 'customer', 'carrier']).optional(),
+      role: z.enum(['supplier', 'customer', 'contractor']).optional(),
       q: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(500).optional(),
       offset: z.coerce.number().int().min(0).optional(),
