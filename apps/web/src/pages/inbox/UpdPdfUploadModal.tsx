@@ -23,6 +23,7 @@ import type {
 } from '@matcheck/contracts';
 import { api, apiUploadFile, ApiError } from '../../services/api';
 import { ContractorSelect } from './ContractorSelect';
+import { SiteSelect } from './SiteSelect';
 
 type Stage = 'select' | 'parsing' | 'review' | 'saving' | 'conflict';
 
@@ -56,6 +57,7 @@ export function UpdPdfUploadModal({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [lastFile, setLastFile] = useState<File | null>(null);
   const [contractorId, setContractorId] = useState<string | null>(null);
+  const [siteId, setSiteId] = useState<string | null>(null);
   const [conflict, setConflict] = useState<UpdDuplicateExisting | null>(null);
 
   useEffect(() => {
@@ -72,6 +74,7 @@ export function UpdPdfUploadModal({
     setPreviewUrl(null);
     setLastFile(null);
     setContractorId(null);
+    setSiteId(null);
     setConflict(null);
     form.resetFields();
   }
@@ -112,10 +115,10 @@ export function UpdPdfUploadModal({
     accept: '.pdf,application/pdf',
     maxCount: 1,
     showUploadList: false,
-    disabled: !contractorId,
+    disabled: !contractorId || !siteId,
     beforeUpload: async (file) => {
-      if (!contractorId) {
-        message.warning('Сначала выберите подрядчика');
+      if (!contractorId || !siteId) {
+        message.warning('Сначала выберите подрядчика и объект');
         return false;
       }
       const f = file as unknown as File;
@@ -128,7 +131,7 @@ export function UpdPdfUploadModal({
   };
 
   async function saveConfirm(replaceExistingId?: string): Promise<void> {
-    if (!parseRes || !contractorId) return;
+    if (!parseRes || !contractorId || !siteId) return;
     setError(null);
     try {
       const values = await form.validateFields();
@@ -139,6 +142,7 @@ export function UpdPdfUploadModal({
         parsed: values,
         direction,
         contractorId,
+        siteId,
         ...(replaceExistingId ? { replaceExistingId } : {}),
       });
       message.success(replaceExistingId ? 'УПД заменён' : 'УПД сохранён');
@@ -223,14 +227,20 @@ export function UpdPdfUploadModal({
               <ContractorSelect value={contractorId} onChange={setContractorId} />
             </div>
           </div>
+          <div>
+            <Typography.Text strong>Объект</Typography.Text>
+            <div style={{ marginTop: 4 }}>
+              <SiteSelect value={siteId} onChange={setSiteId} />
+            </div>
+          </div>
           <Upload.Dragger {...uploadProps}>
             <p style={{ fontSize: 16, marginBottom: 8 }}>
               Перетащите PDF сюда или кликните для выбора
             </p>
             <Typography.Text type="secondary">
-              {contractorId
+              {contractorId && siteId
                 ? 'Поддерживаются только PDF с текстовым слоем. Максимум 10 МБ.'
-                : 'Сначала выберите подрядчика выше.'}
+                : 'Сначала выберите подрядчика и объект выше.'}
             </Typography.Text>
           </Upload.Dragger>
         </Space>

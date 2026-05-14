@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { SourceDirection, UpdDuplicateExisting } from '@matcheck/contracts';
 import { api, ApiError } from '../../services/api';
 import { ContractorSelect } from './ContractorSelect';
+import { SiteSelect } from './SiteSelect';
 
 type Stage = 'select' | 'uploading' | 'conflict';
 
@@ -27,6 +28,7 @@ export function UpdXmlUploadModal({
 }) {
   const qc = useQueryClient();
   const [contractorId, setContractorId] = useState<string | null>(null);
+  const [siteId, setSiteId] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage>('select');
   const [pendingXml, setPendingXml] = useState<string | null>(null);
   const [conflict, setConflict] = useState<UpdDuplicateExisting | null>(null);
@@ -34,6 +36,7 @@ export function UpdXmlUploadModal({
 
   function reset() {
     setContractorId(null);
+    setSiteId(null);
     setStage('select');
     setPendingXml(null);
     setConflict(null);
@@ -46,8 +49,8 @@ export function UpdXmlUploadModal({
   }
 
   async function send(xml: string, replaceExistingId?: string): Promise<void> {
-    if (!contractorId) {
-      message.warning('Сначала выберите подрядчика');
+    if (!contractorId || !siteId) {
+      message.warning('Сначала выберите подрядчика и объект');
       return;
     }
     setError(null);
@@ -57,6 +60,7 @@ export function UpdXmlUploadModal({
         xml,
         direction,
         contractorId,
+        siteId,
         ...(replaceExistingId ? { replaceExistingId } : {}),
       });
       message.success(replaceExistingId ? 'УПД заменён' : 'УПД загружен');
@@ -85,10 +89,10 @@ export function UpdXmlUploadModal({
     accept: '.xml',
     maxCount: 1,
     showUploadList: false,
-    disabled: !contractorId || stage === 'uploading',
+    disabled: !contractorId || !siteId || stage === 'uploading',
     beforeUpload: async (file) => {
-      if (!contractorId) {
-        message.warning('Сначала выберите подрядчика');
+      if (!contractorId || !siteId) {
+        message.warning('Сначала выберите подрядчика и объект');
         return false;
       }
       const f = file as unknown as File;
@@ -138,6 +142,16 @@ export function UpdXmlUploadModal({
               />
             </div>
           </div>
+          <div>
+            <Typography.Text strong>Объект</Typography.Text>
+            <div style={{ marginTop: 4 }}>
+              <SiteSelect
+                value={siteId}
+                onChange={setSiteId}
+                disabled={stage === 'uploading'}
+              />
+            </div>
+          </div>
           <Upload.Dragger {...uploadProps}>
             <p style={{ fontSize: 16, marginBottom: 8 }}>
               {stage === 'uploading' ? (
@@ -147,9 +161,9 @@ export function UpdXmlUploadModal({
               )}
             </p>
             <Typography.Text type="secondary">
-              {contractorId
+              {contractorId && siteId
                 ? 'XML формата УПД (электронный документ из ЭДО).'
-                : 'Сначала выберите подрядчика выше.'}
+                : 'Сначала выберите подрядчика и объект выше.'}
             </Typography.Text>
           </Upload.Dragger>
         </Space>

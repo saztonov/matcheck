@@ -105,6 +105,7 @@ function sdRow(sd: typeof sourceDocuments.$inferSelect) {
     supplierId: sd.supplierId,
     recipientId: sd.recipientId,
     contractorId: sd.contractorId,
+    siteId: sd.siteId,
     docNumber: sd.docNumber,
     docDate: sd.docDate?.toISOString().slice(0, 10) ?? null,
     totalSum: sd.totalSum,
@@ -438,7 +439,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       const recipientId = parsed.recipient
         ? await findOrCreateCounterparty(app, parsed.recipient, 'customer')
         : null;
-      const { contractorId, replaceExistingId } = req.body;
+      const { contractorId, siteId, replaceExistingId } = req.body;
 
       const docDate = parsed.docDate ? new Date(parsed.docDate) : null;
       const duplicate = await findUpdDuplicate(app, {
@@ -475,6 +476,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           supplierId,
           recipientId,
           contractorId,
+          siteId,
           docNumber: parsed.docNumber,
           docDate,
           totalSum: parsed.totalSum?.toString() ?? null,
@@ -598,7 +600,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       },
     },
     async (req, reply) => {
-      const { draftS3Key, parsed, direction, contractorId, replaceExistingId } = req.body;
+      const { draftS3Key, parsed, direction, contractorId, siteId, replaceExistingId } = req.body;
 
       const supplier = parsed.supplier;
       const supplierId =
@@ -657,6 +659,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           supplierId,
           recipientId,
           contractorId,
+          siteId,
           docNumber: parsed.docNumber ?? null,
           docDate,
           totalSum: parsed.totalSum != null ? parsed.totalSum.toString() : null,

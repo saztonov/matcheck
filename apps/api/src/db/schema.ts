@@ -305,6 +305,7 @@ export const sourceDocuments = pgTable(
     contractorId: uuid('contractor_id').references(() => counterparties.id, {
       onDelete: 'set null',
     }),
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
     docNumber: text('doc_number'),
     docDate: timestamp('doc_date', { withTimezone: false, mode: 'date' }),
     totalSum: numeric('total_sum', { precision: 18, scale: 2 }),
@@ -351,6 +352,7 @@ export const sourceDocuments = pgTable(
     index('source_contractor_idx')
       .on(t.contractorId)
       .where(sql`${t.contractorId} is not null`),
+    index('source_site_idx').on(t.siteId).where(sql`${t.siteId} is not null`),
     check(
       'source_upd_required',
       sql`(${t.kind} <> 'upd') or (${t.docNumber} is not null and ${t.docDate} is not null and ${t.totalSum} is not null)`,

@@ -82,6 +82,7 @@ export const SourceDocumentSchema = z.object({
   supplierId: z.string().uuid().nullable(),
   recipientId: z.string().uuid().nullable(),
   contractorId: z.string().uuid().nullable(),
+  siteId: z.string().uuid().nullable(),
   docNumber: z.string().nullable(),
   docDate: z.string().nullable(),
   totalSum: z.string().nullable(),
@@ -113,6 +114,7 @@ export const ManualUpdUploadRequestSchema = z.object({
   xml: z.string().min(1).max(10_000_000),
   direction: SourceDirectionSchema,
   contractorId: z.string().uuid(),
+  siteId: z.string().uuid(),
   // Если указан — подтверждение «Заменить» существующий УПД с этим id.
   // Сервер удалит старый и создаст новый.
   replaceExistingId: z.string().uuid().optional(),
@@ -206,6 +208,7 @@ export const UpdPdfConfirmRequestSchema = z.object({
   parsed: UpdPdfParsedSchema,
   direction: SourceDirectionSchema,
   contractorId: z.string().uuid(),
+  siteId: z.string().uuid(),
   // Подтверждение «Заменить» существующий УПД (см. UpdDuplicateConflictSchema).
   replaceExistingId: z.string().uuid().optional(),
 });

@@ -92,6 +92,13 @@
       "when": 1779926400000,
       "tag": "0012_upd_contractor_and_dedup",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780012800000,
+      "tag": "0013_upd_site_id",
+      "breakpoints": true
     }
   ]
 }
