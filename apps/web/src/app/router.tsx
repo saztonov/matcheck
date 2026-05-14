@@ -10,6 +10,7 @@ const Login = lazy(() => import('../pages/auth/Login'));
 const Register = lazy(() => import('../pages/auth/Register'));
 const Inbox = lazy(() => import('../pages/inbox/Inbox'));
 const KppPage = lazy(() => import('../pages/kpp/KppPage'));
+const ShipmentPage = lazy(() => import('../pages/shipments/ShipmentPage'));
 const Sites = lazy(() => import('../pages/references/Sites'));
 const Counterparties = lazy(() => import('../pages/references/Counterparties'));
 const Materials = lazy(() => import('../pages/references/Materials'));
@@ -48,6 +49,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/kpp" replace /> },
       { path: 'kpp', element: suspense(<KppPage />) },
+      { path: 'shipments', element: suspense(<ShipmentPage />) },
       {
         path: 'documents',
         element: (

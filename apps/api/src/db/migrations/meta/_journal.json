@@ -50,6 +50,20 @@
       "when": 1779580860000,
       "tag": "0006_deliveries_site_contractor",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779667200000,
+      "tag": "0007_shipments",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1779667260000,
+      "tag": "0008_reports_views",
+      "breakpoints": true
     }
   ]
 }

@@ -13,7 +13,6 @@ import {
   Select,
   Space,
   Spin,
-  Tag,
   Tooltip,
   Typography,
   Upload,
@@ -29,48 +28,43 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Counterparty,
-  Delivery,
-  DeliveryStatusCode,
+  Shipment,
+  ShipmentKind,
+  ShipmentStatusCode,
   Site,
-  SourceDocument,
-  SourceDocumentDetail,
   Status,
 } from '@matcheck/contracts';
 import { api } from '../../services/api';
-import { SYSTEM_SITE_ID } from '../../lib/db';
 import { capturePhoto } from '../../services/photoPipeline';
 import {
   applyLocalEdit,
   effectiveState,
   enqueueMutation,
-  getDelivery,
+  getShipment,
   markTombstone,
   upsertServerSnapshot,
-} from '../../services/deliveries';
+} from '../../services/shipments';
 import { runSync } from '../../services/sync';
-import { db } from '../../lib/db';
+import { db, SYSTEM_SITE_ID } from '../../lib/db';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
-import { DeliveriesHistory } from './DeliveriesHistory';
-import { ExpectedUpds } from './ExpectedUpds';
-import { PhotoGallery } from './PhotoGallery';
-import { VehicleFillGauge } from './VehicleFillGauge';
-import { GroupedItemsList } from './grouping/GroupedItemsList';
+import { PhotoGallery } from '../kpp/PhotoGallery';
+import { ShipmentsHistory } from './ShipmentsHistory';
 
 type DraftItem = {
   clientKey: string;
   lineNo: number;
   nameRaw: string;
-  qtyPlanned: string | null;
   qtyActual: string | null;
   unit: string;
   materialId: string | null;
-  volumeM3: string | null;
-  massKg: string | null;
-  volumeConfidence: 'low' | 'medium' | 'high' | null;
-  groupName: string | null;
 };
 
-type ListTab = 'expected' | 'accepted';
+const KIND_OPTIONS: { label: string; value: ShipmentKind }[] = [
+  { label: 'Подрядчику', value: 'contractor' },
+  { label: 'Возврат', value: 'return' },
+  { label: 'Перемещение', value: 'transfer' },
+  { label: 'Списание', value: 'writeoff' },
+];
 
 const trimQty = (s: string) =>
   s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
@@ -80,41 +74,42 @@ function newKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export default function KppPage() {
+export default function ShipmentPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
-  const deliveryId = params.get('delivery');
-  const fromAccepted = params.get('from') === 'accepted';
-  const tab: ListTab = params.get('tab') === 'accepted' ? 'accepted' : 'expected';
+  const shipmentId = params.get('shipment');
+  const fromList = params.get('from') === 'list';
 
   const [items, setItems] = useState<DraftItem[]>([]);
-  const [plate, setPlate] = useState('');
-  const [comment, setComment] = useState('');
+  const [kind, setKind] = useState<ShipmentKind>('contractor');
   const [siteId, setSiteId] = useState<string | null>(null);
-  const [contractorId, setContractorId] = useState<string | null>(null);
-  const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
-  const [loadedDelivery, setLoadedDelivery] = useState<Delivery | null>(null);
+  const [destSiteId, setDestSiteId] = useState<string | null>(null);
+  const [receiverId, setReceiverId] = useState<string | null>(null);
+  const [plate, setPlate] = useState('');
+  const [driverName, setDriverName] = useState('');
+  const [comment, setComment] = useState('');
+  const [loadedShipment, setLoadedShipment] = useState<Shipment | null>(null);
   const [creating, setCreating] = useState(false);
 
-  // Сбрасываем локальное состояние при выходе из формы
   useEffect(() => {
-    if (!deliveryId) {
+    if (!shipmentId) {
       setItems([]);
-      setPlate('');
-      setComment('');
+      setKind('contractor');
       setSiteId(null);
-      setContractorId(null);
-      setSelectedUpd(null);
-      setLoadedDelivery(null);
+      setDestSiteId(null);
+      setReceiverId(null);
+      setPlate('');
+      setDriverName('');
+      setComment('');
+      setLoadedShipment(null);
     }
-  }, [deliveryId]);
+  }, [shipmentId]);
 
   const sitesQuery = useQuery({
     queryKey: ['sites', 'all'],
     queryFn: () => api.get<{ items: Site[]; total: number }>('/sites?activeOnly=true&limit=200'),
   });
-
   const counterpartiesQuery = useQuery({
     queryKey: ['counterparties', 'all'],
     queryFn: () =>
@@ -123,153 +118,85 @@ export default function KppPage() {
 
   const sites = sitesQuery.data?.items ?? [];
   const counterparties = counterpartiesQuery.data?.items ?? [];
+  // Для возврата фильтруем по supplier; для contractor — любые контрагенты.
+  const receiverOptions =
+    kind === 'return' ? counterparties.filter((c) => c.isSupplier) : counterparties;
 
-  const deliveryQuery = useQuery({
-    queryKey: ['deliveries', deliveryId],
-    queryFn: async (): Promise<Delivery> => {
-      if (!deliveryId) throw new Error('no delivery id');
+  const shipmentQuery = useQuery({
+    queryKey: ['shipments', shipmentId],
+    queryFn: async (): Promise<Shipment> => {
+      if (!shipmentId) throw new Error('no shipment id');
       try {
-        const remote = await api.get<Delivery>(`/deliveries/${deliveryId}`);
+        const remote = await api.get<Shipment>(`/shipments/${shipmentId}`);
         await upsertServerSnapshot([remote]);
         return remote;
       } catch (err) {
-        // Offline или 404 — отдаём локальный snapshot, если он есть
-        const local = await getDelivery(deliveryId);
+        const local = await getShipment(shipmentId);
         const eff = local ? effectiveState(local) : null;
         if (eff) return eff;
         throw err;
       }
     },
-    enabled: !!deliveryId,
+    enabled: !!shipmentId,
   });
 
-  // Черновик (server === null) не имеет photos в effectiveState — считаем локально
   const photosCountQuery = useQuery({
-    queryKey: ['photos-count', deliveryId],
+    queryKey: ['shipment-photos-count', shipmentId],
     queryFn: async () => {
-      if (!deliveryId) return 0;
+      if (!shipmentId) return 0;
       const dbi = await db();
       const all = await dbi
         .transaction('photos')
         .store.index('byDelivery')
-        .getAll(deliveryId);
-      return all.length;
+        .getAll(shipmentId);
+      return all.filter((p) => p.operationKind === 'shipment').length;
     },
-    enabled: !!deliveryId,
+    enabled: !!shipmentId,
   });
 
   useEffect(() => {
-    const d = deliveryQuery.data;
-    if (!d) return;
-    setLoadedDelivery(d);
-    setPlate(d.vehiclePlate ?? '');
-    setComment(d.comment ?? '');
-    // siteId/contractorId подхватываются один раз — последующее редактирование
-    // ведётся через локальный state.
-    setSiteId((prev) => prev ?? (d.siteId === SYSTEM_SITE_ID ? null : d.siteId));
-    setContractorId((prev) => prev ?? d.contractorId ?? null);
+    const s = shipmentQuery.data;
+    if (!s) return;
+    setLoadedShipment(s);
+    setKind(s.kind);
+    setSiteId((prev) => prev ?? (s.siteId === SYSTEM_SITE_ID ? null : s.siteId));
+    setDestSiteId((prev) => prev ?? s.destSiteId ?? null);
+    setReceiverId((prev) => prev ?? s.receiverCounterpartyId ?? null);
+    setPlate(s.vehiclePlate ?? '');
+    setDriverName(s.driverName ?? '');
+    setComment(s.comment ?? '');
     setItems(
-      d.items.map((it, idx) => ({
+      s.items.map((it, idx) => ({
         clientKey: newKey(),
         lineNo: idx + 1,
         nameRaw: it.nameRaw,
-        qtyPlanned: it.qtyPlanned,
-        qtyActual: it.qtyActual,
+        qtyActual: it.qtyActual ?? it.qtyPlanned,
         unit: it.unit,
         materialId: it.materialId,
-        volumeM3: it.volumeM3 ?? null,
-        massKg: it.massKg ?? null,
-        volumeConfidence: it.volumeConfidence ?? null,
-        groupName: it.groupName ?? null,
       })),
     );
-    if (d.sourceDocumentIds.length > 0 && !selectedUpd) {
-      api
-        .get<SourceDocument>(`/source-documents/${d.sourceDocumentIds[0]}`)
-        .then(setSelectedUpd)
-        .catch(() => undefined);
-    }
-  }, [deliveryQuery.data, selectedUpd]);
+  }, [shipmentQuery.data]);
 
-  /**
-   * Создаёт пустую приёмку. UUID генерируется на клиенте, запись сразу появляется
-   * в IndexedDB, а мутация уезжает на сервер через runSync (best-effort, может догнаться позже).
-   */
   const createBlank = async () => {
     if (creating) return;
     setCreating(true);
     try {
       const id = crypto.randomUUID();
-      // siteId — обязателен на сервере. До выбора реального объекта используем
-      // системный «Без объекта» как заглушку, чтобы черновик мог уехать
-      // на сервер (status='not_filled') и не зависал в pending-mutations.
-      await applyLocalEdit(id, { siteId: SYSTEM_SITE_ID });
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'delivery_upsert',
-        entityId: id,
-        baseVersion: 0,
-        payload: null,
-      });
-      void runSync();
-      navigate(`/kpp?delivery=${id}`);
-    } catch (err) {
-      message.error(`Не удалось создать приёмку: ${(err as Error).message}`);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  /**
-   * Создаёт приёмку по выбранному УПД. Детали УПД читаются из локального кеша (его наполняет
-   * pullSync); при offline и пустом кеше — ошибка. UUID клиентский, мутация уезжает асинхронно.
-   */
-  const createFromUpd = async (upd: SourceDocument) => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      const dbi = await db();
-      let detail = await dbi.get('source_documents', upd.id);
-      if (!detail) {
-        try {
-          detail = await api.get<SourceDocumentDetail>(`/source-documents/${upd.id}`);
-        } catch {
-          message.error('Нет связи и детали УПД ещё не загружены — попробуйте позже');
-          return;
-        }
-      }
-      const id = crypto.randomUUID();
-      const patch: Partial<Delivery> = {
+      await applyLocalEdit(id, {
+        kind: 'contractor',
         siteId: SYSTEM_SITE_ID,
-        supplierId: detail.supplierId ?? null,
-        sourceDocumentIds: [upd.id],
-        items: detail.items.map((it, i) => ({
-          id: crypto.randomUUID(),
-          materialId: it.materialId ?? null,
-          nameRaw: it.nameRaw,
-          qtyPlanned: it.qty,
-          qtyActual: it.qty,
-          unit: it.unit,
-          comment: null,
-          lineNo: i + 1,
-          volumeM3: it.volumeM3 ?? null,
-          massKg: it.massKg ?? null,
-          volumeConfidence: it.volumeConfidence ?? null,
-          groupName: it.groupName ?? null,
-        })),
-      };
-      await applyLocalEdit(id, patch);
+      });
       await enqueueMutation({
         id: crypto.randomUUID(),
-        kind: 'delivery_upsert',
+        kind: 'shipment_upsert',
         entityId: id,
         baseVersion: 0,
         payload: null,
       });
       void runSync();
-      navigate(`/kpp?delivery=${id}`);
+      navigate(`/shipments?shipment=${id}`);
     } catch (err) {
-      message.error(`Не удалось открыть УПД: ${(err as Error).message}`);
+      message.error(`Не удалось создать отгрузку: ${(err as Error).message}`);
     } finally {
       setCreating(false);
     }
@@ -280,15 +207,13 @@ export default function KppPage() {
     capture: 'environment',
     showUploadList: false,
     beforeUpload: async (file) => {
-      if (!deliveryId) return false;
+      if (!shipmentId) return false;
       try {
-        await capturePhoto('delivery', deliveryId, file, 'cargo');
+        await capturePhoto('shipment', shipmentId, file, 'cargo');
         message.success('Фото добавлено');
-        // Локальный счётчик фото — invalidate на photos-count.
-        // Photos попадут в Delivery.photos после успешного upload + следующего pullSync.
         await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['photos-count', deliveryId] }),
-          queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] }),
+          queryClient.invalidateQueries({ queryKey: ['shipment-photos-count', shipmentId] }),
+          queryClient.invalidateQueries({ queryKey: ['shipments', shipmentId] }),
         ]);
         void runSync();
       } catch (err) {
@@ -309,14 +234,9 @@ export default function KppPage() {
         clientKey: newKey(),
         lineNo: prev.length + 1,
         nameRaw: '',
-        qtyPlanned: null,
         qtyActual: null,
         unit: 'шт',
         materialId: null,
-        volumeM3: null,
-        massKg: null,
-        volumeConfidence: null,
-        groupName: null,
       },
     ]);
   };
@@ -329,109 +249,115 @@ export default function KppPage() {
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
-      // Локальный patch: status.code = 'filled' (полный Status придёт с сервера в pullSync).
+      if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
       const nextStatus: Status = {
-        ...loadedDelivery.status,
-        code: 'filled' satisfies DeliveryStatusCode,
+        ...loadedShipment.status,
+        code: 'shipped' satisfies ShipmentStatusCode,
       };
-      const patch: Partial<Delivery> = {
+      const patch: Partial<Shipment> = {
         status: nextStatus,
-        siteId: siteId ?? loadedDelivery.siteId,
-        supplierId: selectedUpd?.supplierId ?? loadedDelivery.supplierId ?? null,
-        contractorId,
+        kind,
+        siteId: siteId ?? loadedShipment.siteId,
+        receiverCounterpartyId:
+          kind === 'contractor' || kind === 'return' ? receiverId : null,
+        destSiteId: kind === 'transfer' ? destSiteId : null,
         vehiclePlate: plate || null,
-        arrivedAt: loadedDelivery.arrivedAt ?? new Date().toISOString(),
+        driverName: driverName || null,
+        shippedAt: loadedShipment.shippedAt ?? new Date().toISOString(),
         comment: comment || null,
-        sourceDocumentIds: selectedUpd
-          ? [selectedUpd.id]
-          : loadedDelivery.sourceDocumentIds,
         items: items
           .filter((i) => i.nameRaw.trim().length > 0)
           .map((i) => ({
             id: crypto.randomUUID(),
             materialId: i.materialId,
             nameRaw: i.nameRaw,
-            qtyPlanned: i.qtyPlanned,
+            qtyPlanned: null,
             qtyActual: i.qtyActual,
             unit: i.unit,
             comment: null,
             lineNo: i.lineNo,
-            volumeM3: i.volumeM3,
-            massKg: i.massKg,
-            volumeConfidence: i.volumeConfidence,
-            groupName: i.groupName,
+            volumeM3: null,
+            massKg: null,
+            volumeConfidence: null,
+            groupName: null,
           })),
       };
-      await applyLocalEdit(loadedDelivery.id, patch);
+      await applyLocalEdit(loadedShipment.id, patch);
       await enqueueMutation({
         id: crypto.randomUUID(),
-        kind: 'delivery_upsert',
-        entityId: loadedDelivery.id,
-        baseVersion: loadedDelivery.version,
+        kind: 'shipment_upsert',
+        entityId: loadedShipment.id,
+        baseVersion: loadedShipment.version,
         payload: null,
       });
       void runSync();
     },
     onSuccess: () => {
-      message.success('Приёмка сохранена');
-      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
-      navigate('/kpp?tab=accepted');
+      message.success('Отгрузка сохранена');
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+      navigate('/shipments');
     },
     onError: (err: Error) => message.error(err.message),
   });
 
   const cancel = useMutation({
     mutationFn: async () => {
-      if (!deliveryId) return;
+      if (!shipmentId) return;
       const dbi = await db();
-      const local = await dbi.get('deliveries', deliveryId);
-
-      // Черновик, который ни разу не уехал на сервер — чистим только локально.
+      const local = await dbi.get('shipments', shipmentId);
       if (!local || local.server === null) {
-        // Удаляем связанные фото и pending-мутации
         const photoIds = (
-          await dbi.transaction('photos').store.index('byDelivery').getAll(deliveryId)
-        ).map((p) => p.id);
+          await dbi.transaction('photos').store.index('byDelivery').getAll(shipmentId)
+        )
+          .filter((p) => p.operationKind === 'shipment')
+          .map((p) => p.id);
         const mutationIds = (
-          await dbi.transaction('mutations').store.index('byEntity').getAll(deliveryId)
+          await dbi.transaction('mutations').store.index('byEntity').getAll(shipmentId)
         ).map((m) => m.id);
-        const tx = dbi.transaction(['deliveries', 'photos', 'mutations'], 'readwrite');
+        const tx = dbi.transaction(['shipments', 'photos', 'mutations'], 'readwrite');
         for (const pid of photoIds) await tx.objectStore('photos').delete(pid);
         for (const mid of mutationIds) await tx.objectStore('mutations').delete(mid);
-        await tx.objectStore('deliveries').delete(deliveryId);
+        await tx.objectStore('shipments').delete(shipmentId);
         await tx.done;
         return;
       }
-
-      await markTombstone(deliveryId);
+      await markTombstone(shipmentId);
       await enqueueMutation({
         id: crypto.randomUUID(),
-        kind: 'delivery_delete',
-        entityId: deliveryId,
-        baseVersion: loadedDelivery?.version ?? local.version,
+        kind: 'shipment_delete',
+        entityId: shipmentId,
+        baseVersion: loadedShipment?.version ?? local.version,
         payload: null,
       });
       void runSync();
     },
     onSuccess: () => {
-      message.success('Приёмка удалена');
-      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
-      navigate('/kpp');
+      message.success('Отгрузка удалена');
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+      navigate('/shipments');
     },
     onError: (err: Error) => message.error(err.message),
   });
 
-  // Берём максимум: локальные (включая черновик, ещё не на сервере) или server-snapshot.
   const photosCount = Math.max(
     photosCountQuery.data ?? 0,
-    loadedDelivery?.photos.length ?? 0,
+    loadedShipment?.photos.length ?? 0,
   );
+
   const verifyReason: string | null = (() => {
     const reasons: string[] = [];
-    if (!siteId) reasons.push('Выберите объект');
+    if (!siteId) reasons.push('Выберите объект «Откуда»');
+    if (kind === 'contractor' || kind === 'return') {
+      if (!receiverId) reasons.push('Выберите получателя');
+    }
+    if (kind === 'transfer') {
+      if (!destSiteId) reasons.push('Выберите объект «Куда»');
+      else if (destSiteId === siteId) reasons.push('Объект-приёмник должен отличаться от источника');
+    }
     if (!plate.trim()) reasons.push('Заполните госномер');
     if (photosCount === 0) reasons.push('Сделайте хотя бы одно фото');
+    if (items.filter((it) => it.nameRaw.trim().length > 0).length === 0)
+      reasons.push('Добавьте хотя бы одну позицию');
     return reasons.length ? reasons.join(' · ') : null;
   })();
 
@@ -448,20 +374,11 @@ export default function KppPage() {
             value={r.nameRaw}
             placeholder="Наименование"
             onChange={(e) => updateField(r.clientKey, { nameRaw: e.target.value })}
-            readOnly={!!r.materialId}
           />
         ),
       },
       {
-        title: 'План',
-        width: 90,
-        render: (_: unknown, r: DraftItem) =>
-          r.qtyPlanned !== null && r.qtyPlanned !== ''
-            ? trimQty(r.qtyPlanned)
-            : '—',
-      },
-      {
-        title: 'Факт',
+        title: 'Кол-во',
         width: 130,
         render: (_: unknown, r: DraftItem) => (
           <InputNumber
@@ -494,7 +411,7 @@ export default function KppPage() {
         align: 'right',
         render: (_: unknown, r: DraftItem) => (
           <Popconfirm
-            title="Удалить материал?"
+            title="Удалить позицию?"
             okText="Да"
             cancelText="Нет"
             onConfirm={() => removeItem(r.clientKey)}
@@ -512,7 +429,7 @@ export default function KppPage() {
       <Space style={{ width: '100%', justifyContent: 'space-between' }}>
         <Typography.Text strong>№{r.lineNo}</Typography.Text>
         <Popconfirm
-          title="Удалить материал?"
+          title="Удалить позицию?"
           okText="Да"
           cancelText="Нет"
           onConfirm={() => removeItem(r.clientKey)}
@@ -525,19 +442,12 @@ export default function KppPage() {
         value={r.nameRaw}
         placeholder="Наименование"
         onChange={(e) => updateField(r.clientKey, { nameRaw: e.target.value })}
-        readOnly={!!r.materialId}
         style={{ marginTop: 4 }}
       />
       <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
-        <Col span={8}>
+        <Col span={16}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            План
-          </Typography.Text>
-          <div>{r.qtyPlanned !== null && r.qtyPlanned !== '' ? trimQty(r.qtyPlanned) : '—'}</div>
-        </Col>
-        <Col span={10}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Факт
+            Кол-во
           </Typography.Text>
           <InputNumber
             min={0}
@@ -550,7 +460,7 @@ export default function KppPage() {
             }
           />
         </Col>
-        <Col span={6}>
+        <Col span={8}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Ед.
           </Typography.Text>
@@ -563,9 +473,7 @@ export default function KppPage() {
     </div>
   );
 
-  // ──────────── список / форма ────────────
-
-  if (deliveryId && deliveryQuery.isLoading && !loadedDelivery) {
+  if (shipmentId && shipmentQuery.isLoading && !loadedShipment) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
         <Spin size="large" />
@@ -573,22 +481,41 @@ export default function KppPage() {
     );
   }
 
-  // === Режим формы (открыта приёмка) ===
-  if (deliveryId) {
+  // ─── Режим формы ─────────────────────────────────────────────────────────
+  if (shipmentId) {
+    void trimQty;
     return (
       <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: 96 }}>
         <Space style={{ width: '100%' }} align="center">
-          {fromAccepted && (
+          {fromList && (
             <Button
               type="text"
               icon={<ArrowLeftOutlined />}
-              onClick={() => navigate('/kpp?tab=accepted')}
+              onClick={() => navigate('/shipments')}
             />
           )}
           <Typography.Title level={3} style={{ margin: 0 }}>
-            Приёмка
+            Отгрузка
           </Typography.Title>
         </Space>
+
+        <Card size="small" title="Вид отгрузки" styles={{ body: { padding: 12 } }}>
+          <Segmented
+            block
+            options={KIND_OPTIONS}
+            value={kind}
+            onChange={(v) => {
+              const next = v as ShipmentKind;
+              setKind(next);
+              if (next === 'transfer') setReceiverId(null);
+              else setDestSiteId(null);
+              if (next === 'writeoff') {
+                setReceiverId(null);
+                setDestSiteId(null);
+              }
+            }}
+          />
+        </Card>
 
         <Row gutter={[8, 8]}>
           <Col xs={24} sm={12} md={6}>
@@ -596,7 +523,7 @@ export default function KppPage() {
               size="small"
               title={
                 <span>
-                  Объект <span style={{ color: '#ff4d4f' }}>*</span>
+                  Откуда <span style={{ color: '#ff4d4f' }}>*</span>
                 </span>
               }
               styles={{ body: { padding: 12 } }}
@@ -604,43 +531,68 @@ export default function KppPage() {
               <Select<string>
                 size="large"
                 style={{ width: '100%' }}
-                placeholder="Выберите объект"
+                placeholder="Объект"
                 value={siteId ?? undefined}
                 onChange={(v) => setSiteId(v)}
                 showSearch
                 optionFilterProp="label"
                 loading={sitesQuery.isLoading}
-                options={sites.map((s) => ({
-                  value: s.id,
-                  label: `${s.code} · ${s.name}`,
-                }))}
-                notFoundContent={
-                  <Typography.Text type="secondary">
-                    Объектов нет — заведите их в Справочниках
-                  </Typography.Text>
+                options={sites.map((s) => ({ value: s.id, label: `${s.code} · ${s.name}` }))}
+              />
+            </Card>
+          </Col>
+          {kind === 'transfer' && (
+            <Col xs={24} sm={12} md={6}>
+              <Card
+                size="small"
+                title={
+                  <span>
+                    Куда <span style={{ color: '#ff4d4f' }}>*</span>
+                  </span>
                 }
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={6}>
-            <Card size="small" title="Подрядчик" styles={{ body: { padding: 12 } }}>
-              <Select<string>
-                size="large"
-                style={{ width: '100%' }}
-                placeholder="— не указан —"
-                value={contractorId ?? undefined}
-                onChange={(v) => setContractorId(v ?? null)}
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                loading={counterpartiesQuery.isLoading}
-                options={counterparties.map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                }))}
-              />
-            </Card>
-          </Col>
+                styles={{ body: { padding: 12 } }}
+              >
+                <Select<string>
+                  size="large"
+                  style={{ width: '100%' }}
+                  placeholder="Объект-приёмник"
+                  value={destSiteId ?? undefined}
+                  onChange={(v) => setDestSiteId(v)}
+                  showSearch
+                  optionFilterProp="label"
+                  loading={sitesQuery.isLoading}
+                  options={sites
+                    .filter((s) => s.id !== siteId)
+                    .map((s) => ({ value: s.id, label: `${s.code} · ${s.name}` }))}
+                />
+              </Card>
+            </Col>
+          )}
+          {(kind === 'contractor' || kind === 'return') && (
+            <Col xs={24} sm={12} md={6}>
+              <Card
+                size="small"
+                title={
+                  <span>
+                    Получатель <span style={{ color: '#ff4d4f' }}>*</span>
+                  </span>
+                }
+                styles={{ body: { padding: 12 } }}
+              >
+                <Select<string>
+                  size="large"
+                  style={{ width: '100%' }}
+                  placeholder={kind === 'return' ? 'Поставщик' : 'Контрагент'}
+                  value={receiverId ?? undefined}
+                  onChange={(v) => setReceiverId(v)}
+                  showSearch
+                  optionFilterProp="label"
+                  loading={counterpartiesQuery.isLoading}
+                  options={receiverOptions.map((c) => ({ value: c.id, label: c.name }))}
+                />
+              </Card>
+            </Col>
+          )}
           <Col xs={24} sm={12} md={6}>
             <Card size="small" title="Госномер" styles={{ body: { padding: 12 } }}>
               <Input
@@ -653,33 +605,16 @@ export default function KppPage() {
             </Card>
           </Col>
           <Col xs={24} sm={12} md={6}>
-            <Card size="small" title="УПД" styles={{ body: { padding: 12 } }}>
-              {selectedUpd ? (
-                <Space wrap>
-                  <Tag color="blue">{selectedUpd.docNumber ?? '— без номера —'}</Tag>
-                  <Typography.Text type="secondary">
-                    {selectedUpd.docDate ?? '—'} · {selectedUpd.totalSum ?? '—'} ₽
-                  </Typography.Text>
-                </Space>
-              ) : (
-                <Typography.Text type="secondary">— без УПД —</Typography.Text>
-              )}
+            <Card size="small" title="Водитель" styles={{ body: { padding: 12 } }}>
+              <Input
+                size="large"
+                placeholder="ФИО"
+                value={driverName}
+                onChange={(e) => setDriverName(e.target.value)}
+              />
             </Card>
           </Col>
         </Row>
-
-        <VehicleFillGauge
-          items={items.map((it) => ({
-            qty:
-              it.qtyActual !== null && it.qtyActual !== ''
-                ? Number(it.qtyActual)
-                : it.qtyPlanned !== null && it.qtyPlanned !== ''
-                  ? Number(it.qtyPlanned)
-                  : 0,
-            volumeM3: it.volumeM3 !== null && it.volumeM3 !== '' ? Number(it.volumeM3) : null,
-            massKg: it.massKg !== null && it.massKg !== '' ? Number(it.massKg) : null,
-          }))}
-        />
 
         <Collapse
           size="small"
@@ -713,10 +648,11 @@ export default function KppPage() {
                       </Typography.Text>
                     )}
                   </Space>
-                  {deliveryId && loadedDelivery && (
+                  {shipmentId && loadedShipment && (
                     <PhotoGallery
-                      deliveryId={deliveryId}
-                      photos={loadedDelivery.photos}
+                      deliveryId={shipmentId}
+                      photos={loadedShipment.photos}
+                      operationKind="shipment"
                     />
                   )}
                 </Space>
@@ -730,7 +666,7 @@ export default function KppPage() {
           title={`Материалы${items.length ? ` (${items.length})` : ''}`}
           extra={
             <Button size="small" icon={<PlusOutlined />} onClick={addItem}>
-              Материал
+              Добавить
             </Button>
           }
           styles={{ body: { padding: 0 } }}
@@ -738,18 +674,8 @@ export default function KppPage() {
           {items.length === 0 ? (
             <div style={{ padding: 16 }}>
               <Typography.Text type="secondary">
-                Материалы можно не добавлять — приёмка сохранится со статусом «Не оформлена».
-                Чтобы оформить, добавьте строки вручную или выберите УПД.
+                Добавьте позиции вручную или сохраните без них (статус «Не оформлена»).
               </Typography.Text>
-            </div>
-          ) : items.some((it) => it.groupName) ? (
-            <div style={{ padding: 12 }}>
-              <GroupedItemsList
-                items={items}
-                deliveryId={deliveryId}
-                onChange={(key, patch) => updateField(key, patch as Partial<DraftItem>)}
-                onRemove={removeItem}
-              />
             </div>
           ) : (
             <ResponsiveTable<DraftItem>
@@ -776,7 +702,7 @@ export default function KppPage() {
           }}
         >
           <Popconfirm
-            title="Удалить эту приёмку?"
+            title="Удалить эту отгрузку?"
             description="Запись и связанные фото будут удалены."
             okText="Да, удалить"
             cancelText="Нет"
@@ -806,39 +732,23 @@ export default function KppPage() {
     );
   }
 
-  // === Режим списка (нет deliveryId) ===
+  // ─── Режим списка ───────────────────────────────────────────────────────
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
         <Typography.Title level={3} style={{ margin: 0 }}>
-          Приёмка
+          Отгрузка
         </Typography.Title>
-        <Space wrap>
-          <Segmented
-            value={tab}
-            onChange={(v) => {
-              const next = v as ListTab;
-              if (next === 'expected') setParams({});
-              else setParams({ tab: 'accepted' });
-            }}
-            options={[
-              { label: 'Ожидаемые', value: 'expected' },
-              { label: 'Принятые', value: 'accepted' },
-            ]}
-          />
-          <Button type="primary" icon={<PlusOutlined />} loading={creating} onClick={createBlank}>
-            Новая приёмка
-          </Button>
-        </Space>
+        <Button type="primary" icon={<PlusOutlined />} loading={creating} onClick={createBlank}>
+          Новая отгрузка
+        </Button>
       </Space>
-
-      {tab === 'expected' ? (
-        <ExpectedUpds onOpen={createFromUpd} />
-      ) : (
-        <DeliveriesHistory
-          onOpen={(id) => navigate(`/kpp?delivery=${id}&from=accepted`)}
-        />
-      )}
+      <ShipmentsHistory
+        onOpen={(id) => {
+          setParams({});
+          navigate(`/shipments?shipment=${id}&from=list`);
+        }}
+      />
     </Space>
   );
 }

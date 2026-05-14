@@ -21,3 +21,9 @@ export type StatusListResponse = z.infer<typeof StatusListResponseSchema>;
  */
 export const DeliveryStatusCodeSchema = z.enum(['not_filled', 'draft', 'filled']);
 export type DeliveryStatusCode = z.infer<typeof DeliveryStatusCodeSchema>;
+
+/**
+ * Допустимые коды статусов для отгрузки (entity_type='shipment').
+ */
+export const ShipmentStatusCodeSchema = z.enum(['not_filled', 'draft', 'shipped']);
+export type ShipmentStatusCode = z.infer<typeof ShipmentStatusCodeSchema>;

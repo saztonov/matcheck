@@ -6,29 +6,35 @@ import type {
   DeliveryPhoto,
   PhotoDeleteResponse,
   PhotoGetUrlResponse,
+  ShipmentPhoto,
 } from '@matcheck/contracts';
 import { api } from '../../services/api';
-import { db } from '../../lib/db';
+import { db, type OperationKind } from '../../lib/db';
 import { useAuthStore } from '../../stores/auth';
 
 const THUMB_SIZE = 140;
 const URL_STALE = 4 * 60 * 1000; // presigned URL живёт 5 минут, обновляем чуть раньше
 
+type AnyPhoto = DeliveryPhoto | ShipmentPhoto;
+
 export function PhotoGallery({
   deliveryId,
   photos,
+  operationKind = 'delivery',
 }: {
   deliveryId: string;
-  photos: DeliveryPhoto[];
+  photos: AnyPhoto[];
+  operationKind?: OperationKind;
 }): JSX.Element | null {
   const canDelete = useAuthStore((s) => s.user?.role === 'admin');
   const queryClient = useQueryClient();
+  const invalidateKey = operationKind === 'shipment' ? 'shipments' : 'deliveries';
 
   const del = useMutation({
     mutationFn: (id: string) => api.delete<PhotoDeleteResponse>(`/photos/${id}`),
     onSuccess: async (_, id) => {
       message.success('Фото удалено');
-      await queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] });
+      await queryClient.invalidateQueries({ queryKey: [invalidateKey, deliveryId] });
       const dbi = await db();
       await dbi.delete('photos', id).catch(() => undefined);
     },
@@ -69,7 +75,7 @@ function PhotoThumb({
   onDelete,
   deleting,
 }: {
-  photo: DeliveryPhoto;
+  photo: AnyPhoto;
   canDelete: boolean;
   onDelete: () => void;
   deleting: boolean;

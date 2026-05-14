@@ -3,6 +3,7 @@ import type {
   Counterparty,
   Delivery,
   Material,
+  Shipment,
   Site,
   SourceDocumentDetail,
 } from '@matcheck/contracts';
@@ -14,6 +15,8 @@ import type {
  */
 export const SYSTEM_SITE_ID = '00000000-0000-0000-0000-000000000001';
 
+export type OperationKind = 'delivery' | 'shipment';
+
 export type DeliveryRecord = {
   id: string;
   server: Delivery | null;
@@ -23,9 +26,18 @@ export type DeliveryRecord = {
   lastSyncedAt: number | null;
 };
 
+export type ShipmentRecord = {
+  id: string;
+  server: Shipment | null;
+  local: Partial<Shipment> | null;
+  tombstone: boolean;
+  version: number;
+  lastSyncedAt: number | null;
+};
+
 export type MutationRecord = {
   id: string;
-  kind: 'delivery_upsert' | 'delivery_delete';
+  kind: 'delivery_upsert' | 'delivery_delete' | 'shipment_upsert' | 'shipment_delete';
   entityId: string;
   baseVersion: number;
   payload: unknown;
@@ -34,9 +46,14 @@ export type MutationRecord = {
   conflictPending?: boolean;
 };
 
+/**
+ * Фото для приёмки или отгрузки. Поле `deliveryId` исторически — это
+ * «operationId»; новые записи различают тип через `operationKind`.
+ */
 export type PhotoRecord = {
   id: string;
   deliveryId: string;
+  operationKind: OperationKind;
   origin: 'local' | 'remote';
   kind: 'document' | 'cargo' | 'vehicle' | 'other';
   contentHash: string;
@@ -61,6 +78,7 @@ export type SettingsRecord = {
 
 interface MatcheckDB extends DBSchema {
   deliveries: { key: string; value: DeliveryRecord; indexes: { byTombstone: 'tombstone' } };
+  shipments: { key: string; value: ShipmentRecord; indexes: { byTombstone: 'tombstone' } };
   mutations: { key: string; value: MutationRecord; indexes: { byEntity: 'entityId' } };
   photos: {
     key: string;
@@ -74,7 +92,7 @@ interface MatcheckDB extends DBSchema {
 
 let dbPromise: Promise<IDBPDatabase<MatcheckDB>> | null = null;
 
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export function db(): Promise<IDBPDatabase<MatcheckDB>> {
   if (!dbPromise) {
@@ -124,6 +142,24 @@ export function db(): Promise<IDBPDatabase<MatcheckDB>> {
             const r = cursor.value;
             if (r.local && r.local.siteId === undefined) {
               await cursor.update({ ...r, local: { ...r.local, siteId: SYSTEM_SITE_ID } });
+            }
+            const next = await cursor.continue();
+            await walk(next);
+          });
+        }
+        if (oldVersion < 3) {
+          // Новый store shipments — симметрично deliveries.
+          if (!database.objectStoreNames.contains('shipments')) {
+            const sh = database.createObjectStore('shipments', { keyPath: 'id' });
+            sh.createIndex('byTombstone', 'tombstone');
+          }
+          // PhotoRecord теперь несёт operationKind. Существующим записям проставляем 'delivery'.
+          const photos = tx.objectStore('photos');
+          photos.openCursor().then(async function walk(cursor) {
+            if (!cursor) return;
+            const p = cursor.value;
+            if (!('operationKind' in p)) {
+              await cursor.update({ ...p, operationKind: 'delivery' as const });
             }
             const next = await cursor.continue();
             await walk(next);

@@ -20,6 +20,12 @@ import {
 // ─── Enums ─────────────────────────────────────────────────────────────────
 
 export const userRoleEnum = pgEnum('user_role', ['admin', 'manager', 'inspector_kpp']);
+export const shipmentKindEnum = pgEnum('shipment_kind', [
+  'contractor',
+  'return',
+  'transfer',
+  'writeoff',
+]);
 export const sourceKindEnum = pgEnum('source_kind', ['upd', 'request']);
 export const sourceOriginEnum = pgEnum('source_origin', [
   'edo_diadoc',
@@ -455,6 +461,114 @@ export const deliveryPhotos = pgTable(
       .where(sql`${t.contentHash} is not null`),
     uniqueIndex('delivery_photo_idempotency_unique')
       .on(t.deliveryId, t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} is not null`),
+  ],
+);
+
+// ─── Shipments (отгрузка) ──────────────────────────────────────────────────
+
+export const shipments = pgTable(
+  'shipments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    statusId: uuid('status_id')
+      .notNull()
+      .references(() => statuses.id),
+    kind: shipmentKindEnum('kind').notNull(),
+    siteId: uuid('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'restrict' }),
+    receiverCounterpartyId: uuid('receiver_counterparty_id').references(() => counterparties.id, {
+      onDelete: 'set null',
+    }),
+    destSiteId: uuid('dest_site_id').references(() => sites.id, { onDelete: 'restrict' }),
+    vehiclePlate: varchar('vehicle_plate', { length: 16 }),
+    driverName: text('driver_name'),
+    shippedAt: timestamp('shipped_at', { withTimezone: true }),
+    inspectorId: uuid('inspector_id').references(() => users.id, { onDelete: 'set null' }),
+    comment: text('comment'),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('shipment_site_updated_idx').on(t.siteId, t.updatedAt),
+    index('shipment_kind_idx').on(t.kind),
+    index('shipment_inspector_idx').on(t.inspectorId),
+    index('shipment_dest_site_idx')
+      .on(t.destSiteId)
+      .where(sql`${t.kind} = 'transfer'`),
+    index('shipment_receiver_idx')
+      .on(t.receiverCounterpartyId)
+      .where(sql`${t.receiverCounterpartyId} is not null`),
+    check(
+      'shipments_kind_links_chk',
+      sql`(
+        (${t.kind} = 'contractor' AND ${t.receiverCounterpartyId} IS NOT NULL AND ${t.destSiteId} IS NULL)
+        OR (${t.kind} = 'return'    AND ${t.receiverCounterpartyId} IS NOT NULL AND ${t.destSiteId} IS NULL)
+        OR (${t.kind} = 'transfer'  AND ${t.receiverCounterpartyId} IS NULL     AND ${t.destSiteId} IS NOT NULL AND ${t.destSiteId} <> ${t.siteId})
+        OR (${t.kind} = 'writeoff'  AND ${t.receiverCounterpartyId} IS NULL     AND ${t.destSiteId} IS NULL)
+      )`,
+    ),
+  ],
+);
+
+export const shipmentSources = pgTable(
+  'shipment_sources',
+  {
+    shipmentId: uuid('shipment_id')
+      .notNull()
+      .references(() => shipments.id, { onDelete: 'cascade' }),
+    sourceDocumentId: uuid('source_document_id')
+      .notNull()
+      .references(() => sourceDocuments.id, { onDelete: 'restrict' }),
+  },
+  (t) => [primaryKey({ columns: [t.shipmentId, t.sourceDocumentId] })],
+);
+
+export const shipmentItems = pgTable(
+  'shipment_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    shipmentId: uuid('shipment_id')
+      .notNull()
+      .references(() => shipments.id, { onDelete: 'cascade' }),
+    materialId: uuid('material_id').references(() => materials.id, { onDelete: 'set null' }),
+    nameRaw: text('name_raw').notNull(),
+    qtyPlanned: numeric('qty_planned', { precision: 18, scale: 4 }),
+    qtyActual: numeric('qty_actual', { precision: 18, scale: 4 }),
+    unit: varchar('unit', { length: 16 }).notNull().default('шт'),
+    comment: text('comment'),
+    lineNo: integer('line_no').notNull(),
+    volumeM3: numeric('volume_m3', { precision: 10, scale: 4 }),
+    massKg: numeric('mass_kg', { precision: 10, scale: 3 }),
+    volumeConfidence: text('volume_confidence'),
+    groupName: text('group_name'),
+  },
+  (t) => [index('shipment_items_material_idx').on(t.materialId)],
+);
+
+export const shipmentPhotos = pgTable(
+  'shipment_photos',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    shipmentId: uuid('shipment_id')
+      .notNull()
+      .references(() => shipments.id, { onDelete: 'cascade' }),
+    kind: photoKindEnum('kind').notNull().default('cargo'),
+    s3Key: text('s3_key').notNull(),
+    thumbS3Key: text('thumb_s3_key'),
+    contentHash: varchar('content_hash', { length: 64 }),
+    idempotencyKey: uuid('idempotency_key'),
+    takenAt: timestamp('taken_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('shipment_photo_content_unique')
+      .on(t.shipmentId, t.contentHash)
+      .where(sql`${t.contentHash} is not null`),
+    uniqueIndex('shipment_photo_idempotency_unique')
+      .on(t.shipmentId, t.idempotencyKey)
       .where(sql`${t.idempotencyKey} is not null`),
   ],
 );

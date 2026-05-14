@@ -2,8 +2,18 @@ import { z } from 'zod';
 
 export const PhotoKindSchema = z.enum(['document', 'cargo', 'vehicle', 'other']);
 
+/**
+ * К чему относится фото — приёмка или отгрузка.
+ * Используется в presign-/get-/delete- эндпоинтах для диспатча по таблицам.
+ */
+export const OperationKindSchema = z.enum(['delivery', 'shipment']);
+export type OperationKind = z.infer<typeof OperationKindSchema>;
+
 export const PhotoPresignRequestSchema = z.object({
-  deliveryId: z.string().uuid(),
+  operationKind: OperationKindSchema.default('delivery'),
+  operationId: z.string().uuid().optional(),
+  // Старое поле для совместимости с уже задеплоенным фронтом приёмки.
+  deliveryId: z.string().uuid().optional(),
   kind: PhotoKindSchema,
   contentHash: z.string().regex(/^[0-9a-f]{64}$/),
   idempotencyKey: z.string().uuid(),

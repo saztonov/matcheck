@@ -1,6 +1,6 @@
 import type { PhotoPresignResponse } from '@matcheck/contracts';
 import { api } from './api';
-import { db } from '../lib/db';
+import { db, type OperationKind } from '../lib/db';
 
 let workerPromise: Promise<Worker> | null = null;
 
@@ -45,7 +45,8 @@ export async function sha256Hex(blob: Blob): Promise<string> {
 }
 
 export async function capturePhoto(
-  deliveryId: string,
+  operationKind: OperationKind,
+  operationId: string,
   blob: Blob,
   kind: 'document' | 'cargo' | 'vehicle' | 'other',
 ): Promise<string> {
@@ -56,19 +57,21 @@ export async function capturePhoto(
   const idempotencyKey = crypto.randomUUID();
   const dbi = await db();
 
-  // De-dup locally if same content already present for this delivery
+  // De-dup locally если такой же hash уже есть для этой операции
+  // (поле deliveryId хранит operationId — для приёмки и отгрузки).
   const existing = await dbi
     .transaction('photos')
     .objectStore('photos')
     .index('byHash')
     .get(contentHash);
-  if (existing && existing.deliveryId === deliveryId) {
+  if (existing && existing.deliveryId === operationId && existing.operationKind === operationKind) {
     return existing.id;
   }
 
   await dbi.put('photos', {
     id,
-    deliveryId,
+    deliveryId: operationId,
+    operationKind,
     origin: 'local',
     kind,
     contentHash,
@@ -90,7 +93,10 @@ export async function uploadPhoto(photoId: string): Promise<void> {
   if (!p || p.uploaded || !p.blob) return;
 
   const presign = await api.post<PhotoPresignResponse>('/photos/presign', {
-    deliveryId: p.deliveryId,
+    operationKind: p.operationKind,
+    operationId: p.deliveryId,
+    // deliveryId оставляем для совместимости со старым сервером (≤ Phase 1).
+    deliveryId: p.operationKind === 'delivery' ? p.deliveryId : undefined,
     kind: p.kind,
     contentHash: p.contentHash,
     idempotencyKey: p.idempotencyKey,
@@ -126,10 +132,15 @@ export async function retryPendingUploads(): Promise<void> {
   const all = await dbi.getAll('photos');
   for (const p of all) {
     if (p.uploaded) continue;
-    // Delivery должен быть уже на сервере, иначе /photos/presign даст 404.
-    // Ждём следующего прохода runSync после успешного push delivery_upsert.
-    const dlv = await dbi.get('deliveries', p.deliveryId);
-    if (!dlv || dlv.server === null) continue;
+    // Операция должна быть уже на сервере, иначе /photos/presign даст 404.
+    // Ждём следующего прохода runSync после успешного push *_upsert.
+    if (p.operationKind === 'shipment') {
+      const sh = await dbi.get('shipments', p.deliveryId);
+      if (!sh || sh.server === null) continue;
+    } else {
+      const dlv = await dbi.get('deliveries', p.deliveryId);
+      if (!dlv || dlv.server === null) continue;
+    }
     try {
       await uploadPhoto(p.id);
     } catch {

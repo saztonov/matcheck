@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DeliverySchema } from './deliveries.js';
+import { ShipmentSchema } from './shipments.js';
 import { SourceDocumentDetailSchema } from './source-documents.js';
 import { CounterpartySchema } from './counterparties.js';
 import { MaterialSchema } from './materials.js';
@@ -8,6 +9,7 @@ import { SiteSchema } from './sites.js';
 export const SyncDeltaResponseSchema = z.object({
   cursor: z.string(),
   deliveries: z.array(DeliverySchema),
+  shipments: z.array(ShipmentSchema),
   sourceDocuments: z.array(SourceDocumentDetailSchema),
   counterparties: z.array(CounterpartySchema),
   materials: z.array(MaterialSchema),
@@ -20,6 +22,8 @@ export const SseEventSchema = z.object({
   type: z.enum([
     'delivery_updated',
     'delivery_deleted',
+    'shipment_updated',
+    'shipment_deleted',
     'source_document_updated',
     'counterparty_updated',
     'material_updated',

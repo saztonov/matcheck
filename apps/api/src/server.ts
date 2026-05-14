@@ -18,6 +18,8 @@ import { siteRoutes } from './routes/sites.js';
 import { materialRoutes } from './routes/materials.js';
 import { sourceDocumentRoutes } from './routes/source-documents.js';
 import { deliveryRoutes } from './routes/deliveries.js';
+import { shipmentRoutes } from './routes/shipments.js';
+import { reportRoutes } from './routes/reports.js';
 import { statusRoutes } from './routes/statuses.js';
 import { photoRoutes } from './routes/photos.js';
 import { syncRoutes } from './routes/sync.js';
@@ -60,6 +62,8 @@ export async function buildServer() {
   await app.register(materialRoutes);
   await app.register(sourceDocumentRoutes);
   await app.register(deliveryRoutes);
+  await app.register(shipmentRoutes);
+  await app.register(reportRoutes);
   await app.register(statusRoutes);
   await app.register(photoRoutes);
   await app.register(syncRoutes);

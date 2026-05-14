@@ -10,6 +10,10 @@ import {
   deliveryPhotos,
   deliverySources,
   materials,
+  shipments,
+  shipmentItems,
+  shipmentPhotos,
+  shipmentSources,
   sites,
   sourceDocumentAttachments,
   sourceDocumentItems,
@@ -102,6 +106,40 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
             .select()
             .from(deliverySources)
             .where(sql_in(deliverySources.deliveryId, dIds))
+        : [];
+
+      // ── Shipments (симметрично deliveries) ──
+      const shRowsJoined = await app.db
+        .select({ s: shipments, st: statuses })
+        .from(shipments)
+        .innerJoin(statuses, eq(shipments.statusId, statuses.id))
+        .where(
+          inspectorOnly && inspectorId
+            ? since
+              ? eqAnd(shipments.inspectorId, inspectorId, gte(shipments.updatedAt, since))
+              : eq(shipments.inspectorId, inspectorId)
+            : since
+              ? gte(shipments.updatedAt, since)
+              : undefined,
+        )
+        .orderBy(desc(shipments.updatedAt))
+        .limit(500);
+      const shRows = shRowsJoined.map((r) => ({ ...r.s, _status: r.st }));
+      const shIds = shRows.map((r) => r.id);
+      const shItems = shIds.length
+        ? await app.db.select().from(shipmentItems).where(sql_in(shipmentItems.shipmentId, shIds))
+        : [];
+      const shPhotos = shIds.length
+        ? await app.db
+            .select()
+            .from(shipmentPhotos)
+            .where(sql_in(shipmentPhotos.shipmentId, shIds))
+        : [];
+      const shSources = shIds.length
+        ? await app.db
+            .select()
+            .from(shipmentSources)
+            .where(sql_in(shipmentSources.shipmentId, shIds))
         : [];
 
       return {
@@ -236,6 +274,58 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
             })),
           createdAt: d.createdAt.toISOString(),
           updatedAt: d.updatedAt.toISOString(),
+        })),
+        shipments: shRows.map((s) => ({
+          id: s.id,
+          status: {
+            id: s._status.id,
+            entityType: s._status.entityType,
+            code: s._status.code,
+            label: s._status.label,
+            color: s._status.color,
+            sortOrder: s._status.sortOrder,
+          },
+          kind: s.kind,
+          siteId: s.siteId,
+          receiverCounterpartyId: s.receiverCounterpartyId,
+          destSiteId: s.destSiteId,
+          vehiclePlate: s.vehiclePlate,
+          driverName: s.driverName,
+          shippedAt: s.shippedAt?.toISOString() ?? null,
+          inspectorId: s.inspectorId,
+          comment: s.comment,
+          version: s.version,
+          sourceDocumentIds: shSources
+            .filter((x) => x.shipmentId === s.id)
+            .map((x) => x.sourceDocumentId),
+          items: shItems
+            .filter((i) => i.shipmentId === s.id)
+            .map((i) => ({
+              id: i.id,
+              materialId: i.materialId,
+              nameRaw: i.nameRaw,
+              qtyPlanned: i.qtyPlanned,
+              qtyActual: i.qtyActual,
+              unit: i.unit,
+              comment: i.comment,
+              lineNo: i.lineNo,
+              volumeM3: i.volumeM3,
+              massKg: i.massKg,
+              volumeConfidence: i.volumeConfidence as 'low' | 'medium' | 'high' | null,
+              groupName: i.groupName,
+            })),
+          photos: shPhotos
+            .filter((p) => p.shipmentId === s.id)
+            .map((p) => ({
+              id: p.id,
+              kind: p.kind,
+              s3Key: p.s3Key,
+              thumbS3Key: p.thumbS3Key,
+              contentHash: p.contentHash,
+              takenAt: p.takenAt.toISOString(),
+            })),
+          createdAt: s.createdAt.toISOString(),
+          updatedAt: s.updatedAt.toISOString(),
         })),
       };
     },

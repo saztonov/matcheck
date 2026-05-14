@@ -2,6 +2,10 @@ import type { SyncDeltaResponse } from '@matcheck/contracts';
 import { api, ApiError, ConflictError } from './api';
 import { db } from '../lib/db';
 import { upsertServerSnapshot, buildUpsertPayload } from './deliveries';
+import {
+  upsertServerSnapshot as upsertShipmentSnapshot,
+  buildUpsertPayload as buildShipmentUpsertPayload,
+} from './shipments';
 import { getSetting, setSetting } from '../lib/db';
 import { useAuthStore } from '../stores/auth';
 import { retryPendingUploads } from './photoPipeline';
@@ -14,6 +18,7 @@ export async function pullSync(): Promise<void> {
   const qs = cursor ? `?since=${encodeURIComponent(cursor)}` : '';
   const res = await api.get<SyncDeltaResponse>(`/sync${qs}`);
   await upsertServerSnapshot(res.deliveries);
+  await upsertShipmentSnapshot(res.shipments);
 
   const d = await db();
   const tx = d.transaction(['source_documents', 'references'], 'readwrite');
@@ -49,7 +54,6 @@ export async function pushPendingMutations(): Promise<{ pushed: number; conflict
         }
         const payload = buildUpsertPayload(rec);
         await api.post('/deliveries', payload);
-        // Mutation succeeded — drop local overlay, server snapshot will arrive via SSE/pullSync
         const fresh = await d.get('deliveries', m.entityId);
         if (fresh) await d.put('deliveries', { ...fresh, local: null });
         await d.delete('mutations', m.id);
@@ -57,6 +61,23 @@ export async function pushPendingMutations(): Promise<{ pushed: number; conflict
       } else if (m.kind === 'delivery_delete') {
         await api.delete(`/deliveries/${m.entityId}`);
         await d.delete('deliveries', m.entityId);
+        await d.delete('mutations', m.id);
+        pushed += 1;
+      } else if (m.kind === 'shipment_upsert') {
+        const rec = await d.get('shipments', m.entityId);
+        if (!rec) {
+          await d.delete('mutations', m.id);
+          continue;
+        }
+        const payload = buildShipmentUpsertPayload(rec);
+        await api.post('/shipments', payload);
+        const fresh = await d.get('shipments', m.entityId);
+        if (fresh) await d.put('shipments', { ...fresh, local: null });
+        await d.delete('mutations', m.id);
+        pushed += 1;
+      } else if (m.kind === 'shipment_delete') {
+        await api.delete(`/shipments/${m.entityId}`);
+        await d.delete('shipments', m.entityId);
         await d.delete('mutations', m.id);
         pushed += 1;
       }

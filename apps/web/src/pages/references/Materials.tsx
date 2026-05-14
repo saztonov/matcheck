@@ -33,7 +33,7 @@ export default function MaterialsPage() {
     <div>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }} wrap>
         <Typography.Title level={3} style={{ margin: 0 }}>
-          Материалы
+          Номенклатура
         </Typography.Title>
         <Space>
           <Input.Search placeholder="Название" allowClear onSearch={setSearch} />
