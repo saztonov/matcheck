@@ -8,7 +8,7 @@ import type {
   PhotoGetUrlResponse,
   ShipmentPhoto,
 } from '@matcheck/contracts';
-import { api } from '../../services/api';
+import { api, ApiError } from '../../services/api';
 import { db, type OperationKind } from '../../lib/db';
 import { useAuthStore } from '../../stores/auth';
 
@@ -30,12 +30,31 @@ export function PhotoGallery({
   const queryClient = useQueryClient();
   const invalidateKey = operationKind === 'shipment' ? 'shipments' : 'deliveries';
 
-  const del = useMutation({
-    mutationFn: (id: string) => api.delete<PhotoDeleteResponse>(`/photos/${id}`),
-    onSuccess: async (_, id) => {
-      message.success('Фото удалено');
+  const del = useMutation<PhotoDeleteResponse, Error, string>({
+    mutationFn: async (id: string) => {
       const dbi = await db();
-      await dbi.delete('photos', id).catch(() => undefined);
+      const local = await dbi.get('photos', id);
+      // Локальное несинхронизированное фото — на сервере его нет, не дёргаем бэк.
+      if (local && !local.uploaded) {
+        await dbi.delete('photos', id).catch(() => undefined);
+        return { ok: true };
+      }
+      try {
+        const result = await api.delete<PhotoDeleteResponse>(`/photos/${id}`);
+        await dbi.delete('photos', id).catch(() => undefined);
+        return result;
+      } catch (err) {
+        // Фото уже удалено на сервере (каскад / другой клиент) — чистим IDB и
+        // считаем мутацию успешной, чтобы UI пришёл к консистентному состоянию.
+        if (err instanceof ApiError && err.status === 404) {
+          await dbi.delete('photos', id).catch(() => undefined);
+          return { ok: true };
+        }
+        throw err;
+      }
+    },
+    onSuccess: async () => {
+      message.success('Фото удалено');
       // Инвалидируем оба источника галереи: серверный snapshot приёмки/отгрузки
       // и локальный IDB-список (последний нужен, иначе только что удалённое фото
       // продолжит висеть в merged-списке до перерисовки страницы).
