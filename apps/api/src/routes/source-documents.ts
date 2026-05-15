@@ -22,7 +22,6 @@ import {
 } from '@matcheck/contracts';
 import {
   counterparties,
-  deliveries,
   deliverySources,
   llmCalls,
   materials,
@@ -35,7 +34,6 @@ import {
 import { parseUpdXml } from '../domain/edo/upd.parser.js';
 import { validateUpdTotals } from '../domain/edo/upd-validation.js';
 import { presign, putObject } from '../domain/storage/s3.signer.js';
-import { resolveStatusId } from '../domain/statuses/lookup.js';
 import { publishEvent } from './events.js';
 
 const ListQuerySchema = z.object({
@@ -359,16 +357,24 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           conditions.push(eq(sourceDocuments.siteId, req.user.siteId));
         }
       }
-      // Фильтр «непринятые» имеет смысл только для входящих документов:
-      // он смотрит привязки к deliveries. Для outbound — игнорируем.
-      if (unaccepted && direction !== 'outbound') {
-        const filledStatusId = await resolveStatusId(app, 'delivery', 'filled');
-        const acceptedSub = app.db
-          .select({ id: deliverySources.sourceDocumentId })
-          .from(deliverySources)
-          .innerJoin(deliveries, eq(deliveries.id, deliverySources.deliveryId))
-          .where(eq(deliveries.statusId, filledStatusId));
-        conditions.push(drSql`${sourceDocuments.id} not in ${acceptedSub}`);
+      // Фильтр «непринятые»: УПД считается ожидаемой, пока на неё нет
+      // привязки в delivery_sources / shipment_sources. Статус приёмки/
+      // отгрузки не учитываем — любая привязка (включая draft) делает УПД
+      // занятой. При удалении приёмки/отгрузки FK CASCADE снесёт строку
+      // junction → УПД автоматически вернётся в «Ожидаемые».
+      if (unaccepted) {
+        if (direction !== 'outbound') {
+          const linkedToDelivery = app.db
+            .select({ id: deliverySources.sourceDocumentId })
+            .from(deliverySources);
+          conditions.push(drSql`${sourceDocuments.id} not in ${linkedToDelivery}`);
+        }
+        if (direction !== 'inbound') {
+          const linkedToShipment = app.db
+            .select({ id: shipmentSources.sourceDocumentId })
+            .from(shipmentSources);
+          conditions.push(drSql`${sourceDocuments.id} not in ${linkedToShipment}`);
+        }
       }
       const where = conditions.length ? and(...conditions) : undefined;
       const supplier = alias(counterparties, 'supplier');

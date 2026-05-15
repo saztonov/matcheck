@@ -511,7 +511,10 @@ export const deliverySources = pgTable(
       .notNull()
       .references(() => sourceDocuments.id, { onDelete: 'restrict' }),
   },
-  (t) => [primaryKey({ columns: [t.deliveryId, t.sourceDocumentId] })],
+  (t) => [
+    primaryKey({ columns: [t.deliveryId, t.sourceDocumentId] }),
+    uniqueIndex('delivery_sources_source_document_id_unique').on(t.sourceDocumentId),
+  ],
 );
 
 export const deliveryItems = pgTable('delivery_items', {
@@ -619,7 +622,10 @@ export const shipmentSources = pgTable(
       .notNull()
       .references(() => sourceDocuments.id, { onDelete: 'restrict' }),
   },
-  (t) => [primaryKey({ columns: [t.shipmentId, t.sourceDocumentId] })],
+  (t) => [
+    primaryKey({ columns: [t.shipmentId, t.sourceDocumentId] }),
+    uniqueIndex('shipment_sources_source_document_id_unique').on(t.sourceDocumentId),
+  ],
 );
 
 export const shipmentItems = pgTable(

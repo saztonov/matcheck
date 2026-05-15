@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, gte, ne, or, sql as drSql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, ne, or, sql as drSql } from 'drizzle-orm';
 import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import {
@@ -34,6 +34,33 @@ const ListQuerySchema = z.object({
 });
 
 type StatusRow = typeof statuses.$inferSelect;
+
+class SourceAlreadyLinkedError extends Error {
+  constructor(public readonly sourceDocumentIds: string[]) {
+    super('source_document_already_linked');
+  }
+}
+
+// УПД должна быть привязана не более чем к одной приёмке. Проверяем, что
+// заявленные source_document_id не заняты другой приёмкой. excludeDeliveryId
+// нужен для обновления: те же УПД могут уже быть привязаны к текущей приёмке.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function assertSourcesAvailableForDelivery(
+  app: any,
+  sourceDocumentIds: string[],
+  excludeDeliveryId: string | null,
+) {
+  if (!sourceDocumentIds.length) return;
+  const conds = [inArray(deliverySources.sourceDocumentId, sourceDocumentIds)];
+  if (excludeDeliveryId) conds.push(ne(deliverySources.deliveryId, excludeDeliveryId));
+  const taken = await app.db
+    .select({ sourceDocumentId: deliverySources.sourceDocumentId })
+    .from(deliverySources)
+    .where(and(...conds));
+  if (taken.length) {
+    throw new SourceAlreadyLinkedError(taken.map((r: { sourceDocumentId: string }) => r.sourceDocumentId));
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const resolveStatusId = (app: any, code: string) =>
@@ -227,38 +254,49 @@ export async function deliveryRoutes(rawApp: FastifyInstance): Promise<void> {
 
       const statusId = await resolveStatusId(app, input.statusCode);
 
-      // OCC update
-      if (input.id) {
-        const [existing] = await app.db
-          .select()
-          .from(deliveries)
-          .where(eq(deliveries.id, input.id))
-          .limit(1);
-        if (!existing) {
-          // Create as upsert with explicit id (для офлайн-черновиков с локально сгенерированным id)
-          await createDelivery(app, input, statusId, inspectorId);
-        } else {
-          if (input.baseVersion !== undefined && input.baseVersion !== existing.version) {
-            const server = await buildDeliveryDto(app, existing.id);
-            return reply.code(409).send({
-              error: 'conflict' as const,
-              serverVersion: existing.version,
-              server: server!,
-            });
+      try {
+        // OCC update
+        if (input.id) {
+          const [existing] = await app.db
+            .select()
+            .from(deliveries)
+            .where(eq(deliveries.id, input.id))
+            .limit(1);
+          if (!existing) {
+            // Create as upsert with explicit id (для офлайн-черновиков с локально сгенерированным id)
+            await createDelivery(app, input, statusId, inspectorId);
+          } else {
+            if (input.baseVersion !== undefined && input.baseVersion !== existing.version) {
+              const server = await buildDeliveryDto(app, existing.id);
+              return reply.code(409).send({
+                error: 'conflict' as const,
+                serverVersion: existing.version,
+                server: server!,
+              });
+            }
+            await updateDelivery(app, existing, input, statusId, req.user?.id ?? null);
           }
-          await updateDelivery(app, existing, input, statusId, req.user?.id ?? null);
+          const dto = await buildDeliveryDto(app, input.id);
+          if (!dto) return reply.code(404).send({ error: 'not_found' });
+          publishEvent(app, { type: 'delivery_updated', id: dto.id, ts: new Date().toISOString() });
+          return dto;
         }
-        const dto = await buildDeliveryDto(app, input.id);
-        if (!dto) return reply.code(404).send({ error: 'not_found' });
+
+        const created = await createDelivery(app, input, statusId, inspectorId);
+        const dto = await buildDeliveryDto(app, created.id);
+        if (!dto) throw new Error('Delivery missing after create');
         publishEvent(app, { type: 'delivery_updated', id: dto.id, ts: new Date().toISOString() });
         return dto;
+      } catch (err) {
+        if (err instanceof SourceAlreadyLinkedError) {
+          return reply.code(400).send({
+            error: 'source_document_already_linked',
+            message: 'УПД уже привязана к другой приёмке',
+            details: { sourceDocumentIds: err.sourceDocumentIds },
+          });
+        }
+        throw err;
       }
-
-      const created = await createDelivery(app, input, statusId, inspectorId);
-      const dto = await buildDeliveryDto(app, created.id);
-      if (!dto) throw new Error('Delivery missing after create');
-      publishEvent(app, { type: 'delivery_updated', id: dto.id, ts: new Date().toISOString() });
-      return dto;
     },
   );
 
@@ -355,11 +393,19 @@ async function createDelivery(
     );
   }
   if (input.sourceDocumentIds.length) {
-    await app.db
-      .insert(deliverySources)
-      .values(
-        input.sourceDocumentIds.map((sid) => ({ deliveryId: created.id, sourceDocumentId: sid })),
-      );
+    await assertSourcesAvailableForDelivery(app, input.sourceDocumentIds, created.id);
+    try {
+      await app.db
+        .insert(deliverySources)
+        .values(
+          input.sourceDocumentIds.map((sid) => ({ deliveryId: created.id, sourceDocumentId: sid })),
+        );
+    } catch (err) {
+      if (isSourceDocumentUniqueViolation(err)) {
+        throw new SourceAlreadyLinkedError(input.sourceDocumentIds);
+      }
+      throw err;
+    }
   }
   return created;
 }
@@ -422,10 +468,28 @@ async function updateDelivery(
       })),
     );
   }
+  if (input.sourceDocumentIds.length) {
+    await assertSourcesAvailableForDelivery(app, input.sourceDocumentIds, id);
+  }
   await app.db.delete(deliverySources).where(eq(deliverySources.deliveryId, id));
   if (input.sourceDocumentIds.length) {
-    await app.db
-      .insert(deliverySources)
-      .values(input.sourceDocumentIds.map((sid) => ({ deliveryId: id, sourceDocumentId: sid })));
+    try {
+      await app.db
+        .insert(deliverySources)
+        .values(input.sourceDocumentIds.map((sid) => ({ deliveryId: id, sourceDocumentId: sid })));
+    } catch (err) {
+      if (isSourceDocumentUniqueViolation(err)) {
+        throw new SourceAlreadyLinkedError(input.sourceDocumentIds);
+      }
+      throw err;
+    }
   }
+}
+
+function isSourceDocumentUniqueViolation(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: string; constraint?: string; constraint_name?: string };
+  if (e.code !== '23505') return false;
+  const name = e.constraint ?? e.constraint_name ?? '';
+  return name.endsWith('_source_document_id_unique');
 }

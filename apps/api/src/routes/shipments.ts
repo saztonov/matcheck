@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, gte, ne, or, sql as drSql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, ne, or, sql as drSql } from 'drizzle-orm';
 import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import {
@@ -37,6 +37,41 @@ const ListQuerySchema = z.object({
 });
 
 type StatusRow = typeof statuses.$inferSelect;
+
+class SourceAlreadyLinkedError extends Error {
+  constructor(public readonly sourceDocumentIds: string[]) {
+    super('source_document_already_linked');
+  }
+}
+
+// УПД должна быть привязана не более чем к одной отгрузке. Проверяем, что
+// заявленные source_document_id не заняты другой отгрузкой. excludeShipmentId
+// нужен для обновления: те же УПД могут уже быть привязаны к текущей отгрузке.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function assertSourcesAvailableForShipment(
+  app: any,
+  sourceDocumentIds: string[],
+  excludeShipmentId: string | null,
+) {
+  if (!sourceDocumentIds.length) return;
+  const conds = [inArray(shipmentSources.sourceDocumentId, sourceDocumentIds)];
+  if (excludeShipmentId) conds.push(ne(shipmentSources.shipmentId, excludeShipmentId));
+  const taken = await app.db
+    .select({ sourceDocumentId: shipmentSources.sourceDocumentId })
+    .from(shipmentSources)
+    .where(and(...conds));
+  if (taken.length) {
+    throw new SourceAlreadyLinkedError(taken.map((r: { sourceDocumentId: string }) => r.sourceDocumentId));
+  }
+}
+
+function isSourceDocumentUniqueViolation(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: string; constraint?: string; constraint_name?: string };
+  if (e.code !== '23505') return false;
+  const name = e.constraint ?? e.constraint_name ?? '';
+  return name.endsWith('_source_document_id_unique');
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const resolveStatusId = (app: any, code: string) =>
@@ -241,36 +276,47 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: 'invalid_kind_links', message: linksError });
       }
 
-      if (input.id) {
-        const [existing] = await app.db
-          .select()
-          .from(shipments)
-          .where(eq(shipments.id, input.id))
-          .limit(1);
-        if (!existing) {
-          await createShipment(app, input, statusId, inspectorId);
-        } else {
-          if (input.baseVersion !== undefined && input.baseVersion !== existing.version) {
-            const server = await buildShipmentDto(app, existing.id);
-            return reply.code(409).send({
-              error: 'conflict' as const,
-              serverVersion: existing.version,
-              server: server!,
-            });
+      try {
+        if (input.id) {
+          const [existing] = await app.db
+            .select()
+            .from(shipments)
+            .where(eq(shipments.id, input.id))
+            .limit(1);
+          if (!existing) {
+            await createShipment(app, input, statusId, inspectorId);
+          } else {
+            if (input.baseVersion !== undefined && input.baseVersion !== existing.version) {
+              const server = await buildShipmentDto(app, existing.id);
+              return reply.code(409).send({
+                error: 'conflict' as const,
+                serverVersion: existing.version,
+                server: server!,
+              });
+            }
+            await updateShipment(app, existing, input, statusId, req.user?.id ?? null);
           }
-          await updateShipment(app, existing, input, statusId, req.user?.id ?? null);
+          const dto = await buildShipmentDto(app, input.id);
+          if (!dto) return reply.code(404).send({ error: 'not_found' });
+          publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
+          return dto;
         }
-        const dto = await buildShipmentDto(app, input.id);
-        if (!dto) return reply.code(404).send({ error: 'not_found' });
+
+        const created = await createShipment(app, input, statusId, inspectorId);
+        const dto = await buildShipmentDto(app, created.id);
+        if (!dto) throw new Error('Shipment missing after create');
         publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
         return dto;
+      } catch (err) {
+        if (err instanceof SourceAlreadyLinkedError) {
+          return reply.code(400).send({
+            error: 'source_document_already_linked',
+            message: 'УПД уже привязана к другой отгрузке',
+            details: { sourceDocumentIds: err.sourceDocumentIds },
+          });
+        }
+        throw err;
       }
-
-      const created = await createShipment(app, input, statusId, inspectorId);
-      const dto = await buildShipmentDto(app, created.id);
-      if (!dto) throw new Error('Shipment missing after create');
-      publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
-      return dto;
     },
   );
 
@@ -385,11 +431,19 @@ async function createShipment(
     );
   }
   if (input.sourceDocumentIds.length) {
-    await app.db
-      .insert(shipmentSources)
-      .values(
-        input.sourceDocumentIds.map((sid) => ({ shipmentId: created.id, sourceDocumentId: sid })),
-      );
+    await assertSourcesAvailableForShipment(app, input.sourceDocumentIds, created.id);
+    try {
+      await app.db
+        .insert(shipmentSources)
+        .values(
+          input.sourceDocumentIds.map((sid) => ({ shipmentId: created.id, sourceDocumentId: sid })),
+        );
+    } catch (err) {
+      if (isSourceDocumentUniqueViolation(err)) {
+        throw new SourceAlreadyLinkedError(input.sourceDocumentIds);
+      }
+      throw err;
+    }
   }
   return created;
 }
@@ -449,10 +503,20 @@ async function updateShipment(
       })),
     );
   }
+  if (input.sourceDocumentIds.length) {
+    await assertSourcesAvailableForShipment(app, input.sourceDocumentIds, id);
+  }
   await app.db.delete(shipmentSources).where(eq(shipmentSources.shipmentId, id));
   if (input.sourceDocumentIds.length) {
-    await app.db
-      .insert(shipmentSources)
-      .values(input.sourceDocumentIds.map((sid) => ({ shipmentId: id, sourceDocumentId: sid })));
+    try {
+      await app.db
+        .insert(shipmentSources)
+        .values(input.sourceDocumentIds.map((sid) => ({ shipmentId: id, sourceDocumentId: sid })));
+    } catch (err) {
+      if (isSourceDocumentUniqueViolation(err)) {
+        throw new SourceAlreadyLinkedError(input.sourceDocumentIds);
+      }
+      throw err;
+    }
   }
 }

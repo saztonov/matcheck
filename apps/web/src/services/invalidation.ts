@@ -28,6 +28,12 @@ export function setupInvalidation(qc: QueryClient): () => void {
     sse.addEventListener('delivery_deleted', (evt) => {
       handle('delivery_deleted', evt);
     });
+    sse.addEventListener('shipment_updated', (evt) => {
+      handle('shipment_updated', evt);
+    });
+    sse.addEventListener('shipment_deleted', (evt) => {
+      handle('shipment_deleted', evt);
+    });
     sse.addEventListener('source_document_updated', (evt) => {
       handle('source_document_updated', evt);
     });
@@ -41,7 +47,12 @@ export function setupInvalidation(qc: QueryClient): () => void {
   function handle(type: string, evt: MessageEvent) {
     let keys: string[][] = [];
     if (type === 'delivery_updated' || type === 'delivery_deleted') {
-      keys = [['deliveries'], ['sync']];
+      // source-documents: вкладка «Ожидаемые» зависит от привязок в
+      // delivery_sources — после создания/удаления приёмки список
+      // ожидаемых УПД должен перечитаться.
+      keys = [['deliveries'], ['source-documents'], ['sync']];
+    } else if (type === 'shipment_updated' || type === 'shipment_deleted') {
+      keys = [['shipments'], ['source-documents'], ['sync']];
     } else if (type === 'source_document_updated') {
       keys = [['source-documents'], ['sync']];
     }
