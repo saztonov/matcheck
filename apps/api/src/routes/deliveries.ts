@@ -16,9 +16,13 @@ import {
   deliveryPhotos,
   deliverySources,
   statuses,
+  users,
 } from '../db/schema.js';
 import { deleteObject } from '../domain/storage/s3.signer.js';
-import { resolveStatusId as resolveStatusIdShared } from '../domain/statuses/lookup.js';
+import {
+  getStatusCodeById,
+  resolveStatusId as resolveStatusIdShared,
+} from '../domain/statuses/lookup.js';
 import { publishEvent } from './events.js';
 
 const ListQuerySchema = z.object({
@@ -38,12 +42,15 @@ const resolveStatusId = (app: any, code: string) =>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildDeliveryDto(app: any, id: string) {
   const rows = await app.db
-    .select({ d: deliveries, s: statuses })
+    .select({ d: deliveries, s: statuses, molEmail: users.email })
     .from(deliveries)
     .innerJoin(statuses, eq(deliveries.statusId, statuses.id))
+    .leftJoin(users, eq(deliveries.confirmedByMolUserId, users.id))
     .where(eq(deliveries.id, id))
     .limit(1);
-  const r = rows[0] as { d: typeof deliveries.$inferSelect; s: StatusRow } | undefined;
+  const r = rows[0] as
+    | { d: typeof deliveries.$inferSelect; s: StatusRow; molEmail: string | null }
+    | undefined;
   if (!r) return null;
   const d = r.d;
   const s = r.s;
@@ -78,6 +85,9 @@ async function buildDeliveryDto(app: any, id: string) {
     arrivedAt: d.arrivedAt?.toISOString() ?? null,
     inspectorId: d.inspectorId,
     comment: d.comment,
+    confirmedByMolUserId: d.confirmedByMolUserId,
+    confirmedByMolUserEmail: r.molEmail,
+    confirmedByMolAt: d.confirmedByMolAt?.toISOString() ?? null,
     version: d.version,
     sourceDocumentIds: sources.map((x) => x.sourceDocumentId),
     items: items.map((i) => ({
@@ -236,7 +246,7 @@ export async function deliveryRoutes(rawApp: FastifyInstance): Promise<void> {
               server: server!,
             });
           }
-          await updateDelivery(app, existing.id, input, statusId);
+          await updateDelivery(app, existing, input, statusId, req.user?.id ?? null);
         }
         const dto = await buildDeliveryDto(app, input.id);
         if (!dto) return reply.code(404).send({ error: 'not_found' });
@@ -357,14 +367,27 @@ async function createDelivery(
 async function updateDelivery(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app: any,
-  id: string,
+  existing: typeof deliveries.$inferSelect,
   input: z.infer<typeof DeliveryUpsertSchema>,
   statusId: string,
+  userId: string | null,
 ) {
+  const id = existing.id;
+  // Защита от отката: если документ уже подтверждён МОЛ, обычное «Сохранить»
+  // не должно понижать статус обратно до filled/draft.
+  const existingCode = await getStatusCodeById(app, existing.statusId);
+  const effectiveStatusId =
+    existingCode === 'confirmed_mol' && input.statusCode !== 'confirmed_mol'
+      ? existing.statusId
+      : statusId;
+  // Первичная фиксация аудита подтверждения (идемпотентно: повторное
+  // подтверждение не перезаписывает кто/когда).
+  const isFirstConfirm =
+    input.statusCode === 'confirmed_mol' && existing.confirmedByMolUserId === null;
   await app.db
     .update(deliveries)
     .set({
-      statusId,
+      statusId: effectiveStatusId,
       siteId: input.siteId,
       supplierId: input.supplierId ?? null,
       contractorId: input.contractorId ?? null,
@@ -372,6 +395,10 @@ async function updateDelivery(
       driverName: input.driverName ?? null,
       arrivedAt: input.arrivedAt ? new Date(input.arrivedAt) : null,
       comment: input.comment ?? null,
+      ...(isFirstConfirm && {
+        confirmedByMolUserId: userId,
+        confirmedByMolAt: new Date(),
+      }),
       version: drSql`${deliveries.version} + 1`,
       updatedAt: new Date(),
     })

@@ -475,6 +475,10 @@ export const deliveries = pgTable(
     arrivedAt: timestamp('arrived_at', { withTimezone: true }),
     inspectorId: uuid('inspector_id').references(() => users.id, { onDelete: 'set null' }),
     comment: text('comment'),
+    confirmedByMolUserId: uuid('confirmed_by_mol_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    confirmedByMolAt: timestamp('confirmed_by_mol_at', { withTimezone: true }),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -565,6 +569,10 @@ export const shipments = pgTable(
     shippedAt: timestamp('shipped_at', { withTimezone: true }),
     inspectorId: uuid('inspector_id').references(() => users.id, { onDelete: 'set null' }),
     comment: text('comment'),
+    confirmedByMolUserId: uuid('confirmed_by_mol_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    confirmedByMolAt: timestamp('confirmed_by_mol_at', { withTimezone: true }),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

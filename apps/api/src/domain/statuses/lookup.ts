@@ -19,3 +19,21 @@ export async function resolveStatusId(
   if (!s) throw new Error(`Unknown status: ${entityType}/${code}`);
   return s.id;
 }
+
+/**
+ * Обратный lookup: id → code. Используется, чтобы понять текущий статус
+ * документа в БД и применить логику переходов (например, защита от отката
+ * с confirmed_mol).
+ */
+export async function getStatusCodeById(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  app: any,
+  id: string,
+): Promise<string | null> {
+  const [s] = await app.db
+    .select({ code: statuses.code })
+    .from(statuses)
+    .where(eq(statuses.id, id))
+    .limit(1);
+  return s?.code ?? null;
+}

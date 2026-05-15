@@ -17,9 +17,13 @@ import {
   shipmentPhotos,
   shipmentSources,
   statuses,
+  users,
 } from '../db/schema.js';
 import { deleteObject } from '../domain/storage/s3.signer.js';
-import { resolveStatusId as resolveStatusIdShared } from '../domain/statuses/lookup.js';
+import {
+  getStatusCodeById,
+  resolveStatusId as resolveStatusIdShared,
+} from '../domain/statuses/lookup.js';
 import { publishEvent } from './events.js';
 
 const ListQuerySchema = z.object({
@@ -41,12 +45,15 @@ const resolveStatusId = (app: any, code: string) =>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildShipmentDto(app: any, id: string) {
   const rows = await app.db
-    .select({ s: shipments, st: statuses })
+    .select({ s: shipments, st: statuses, molEmail: users.email })
     .from(shipments)
     .innerJoin(statuses, eq(shipments.statusId, statuses.id))
+    .leftJoin(users, eq(shipments.confirmedByMolUserId, users.id))
     .where(eq(shipments.id, id))
     .limit(1);
-  const r = rows[0] as { s: typeof shipments.$inferSelect; st: StatusRow } | undefined;
+  const r = rows[0] as
+    | { s: typeof shipments.$inferSelect; st: StatusRow; molEmail: string | null }
+    | undefined;
   if (!r) return null;
   const s = r.s;
   const st = r.st;
@@ -82,6 +89,9 @@ async function buildShipmentDto(app: any, id: string) {
     shippedAt: s.shippedAt?.toISOString() ?? null,
     inspectorId: s.inspectorId,
     comment: s.comment,
+    confirmedByMolUserId: s.confirmedByMolUserId,
+    confirmedByMolUserEmail: r.molEmail,
+    confirmedByMolAt: s.confirmedByMolAt?.toISOString() ?? null,
     version: s.version,
     sourceDocumentIds: sources.map((x) => x.sourceDocumentId),
     items: items.map((i) => ({
@@ -248,7 +258,7 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
               server: server!,
             });
           }
-          await updateShipment(app, existing.id, input, statusId);
+          await updateShipment(app, existing, input, statusId, req.user?.id ?? null);
         }
         const dto = await buildShipmentDto(app, input.id);
         if (!dto) return reply.code(404).send({ error: 'not_found' });
@@ -387,14 +397,23 @@ async function createShipment(
 async function updateShipment(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app: any,
-  id: string,
+  existing: typeof shipments.$inferSelect,
   input: z.infer<typeof ShipmentUpsertSchema>,
   statusId: string,
+  userId: string | null,
 ) {
+  const id = existing.id;
+  const existingCode = await getStatusCodeById(app, existing.statusId);
+  const effectiveStatusId =
+    existingCode === 'confirmed_mol' && input.statusCode !== 'confirmed_mol'
+      ? existing.statusId
+      : statusId;
+  const isFirstConfirm =
+    input.statusCode === 'confirmed_mol' && existing.confirmedByMolUserId === null;
   await app.db
     .update(shipments)
     .set({
-      statusId,
+      statusId: effectiveStatusId,
       kind: input.kind,
       siteId: input.siteId,
       receiverCounterpartyId: input.receiverCounterpartyId ?? null,
@@ -403,6 +422,10 @@ async function updateShipment(
       driverName: input.driverName ?? null,
       shippedAt: input.shippedAt ? new Date(input.shippedAt) : null,
       comment: input.comment ?? null,
+      ...(isFirstConfirm && {
+        confirmedByMolUserId: userId,
+        confirmedByMolAt: new Date(),
+      }),
       version: drSql`${shipments.version} + 1`,
       updatedAt: new Date(),
     })

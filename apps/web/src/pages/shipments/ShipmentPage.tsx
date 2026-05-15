@@ -71,6 +71,19 @@ const KIND_OPTIONS: { label: string; value: ShipmentKind }[] = [
 const trimQty = (s: string) =>
   s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 
+function formatMolDate(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+}
+
 function newKey(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -265,53 +278,74 @@ export default function ShipmentPage() {
     );
   };
 
+  const buildPatch = (nextCode: ShipmentStatusCode): Partial<Shipment> => {
+    if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+    const nextStatus: Status = { ...loadedShipment.status, code: nextCode };
+    return {
+      status: nextStatus,
+      kind,
+      siteId: siteId ?? loadedShipment.siteId,
+      receiverCounterpartyId:
+        kind === 'contractor' || kind === 'return' ? receiverId : null,
+      destSiteId: kind === 'transfer' ? destSiteId : null,
+      vehiclePlate: plate || null,
+      driverName: driverName || null,
+      shippedAt: loadedShipment.shippedAt ?? new Date().toISOString(),
+      comment: comment || null,
+      items: items
+        .filter((i) => i.nameRaw.trim().length > 0)
+        .map((i) => ({
+          id: crypto.randomUUID(),
+          materialId: i.materialId,
+          nameRaw: i.nameRaw,
+          qtyPlanned: null,
+          qtyActual: i.qtyActual,
+          unit: i.unit,
+          comment: null,
+          lineNo: i.lineNo,
+          volumeM3: null,
+          massKg: null,
+          volumeConfidence: null,
+          groupName: null,
+        })),
+    };
+  };
+
+  const persistStatus = async (nextCode: ShipmentStatusCode) => {
+    if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+    await applyLocalEdit(loadedShipment.id, buildPatch(nextCode));
+    await enqueueMutation({
+      id: crypto.randomUUID(),
+      kind: 'shipment_upsert',
+      entityId: loadedShipment.id,
+      baseVersion: loadedShipment.version,
+      payload: null,
+    });
+    void runSync();
+  };
+
   const save = useMutation({
     mutationFn: async () => {
       if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
-      const nextStatus: Status = {
-        ...loadedShipment.status,
-        code: 'shipped' satisfies ShipmentStatusCode,
-      };
-      const patch: Partial<Shipment> = {
-        status: nextStatus,
-        kind,
-        siteId: siteId ?? loadedShipment.siteId,
-        receiverCounterpartyId:
-          kind === 'contractor' || kind === 'return' ? receiverId : null,
-        destSiteId: kind === 'transfer' ? destSiteId : null,
-        vehiclePlate: plate || null,
-        driverName: driverName || null,
-        shippedAt: loadedShipment.shippedAt ?? new Date().toISOString(),
-        comment: comment || null,
-        items: items
-          .filter((i) => i.nameRaw.trim().length > 0)
-          .map((i) => ({
-            id: crypto.randomUUID(),
-            materialId: i.materialId,
-            nameRaw: i.nameRaw,
-            qtyPlanned: null,
-            qtyActual: i.qtyActual,
-            unit: i.unit,
-            comment: null,
-            lineNo: i.lineNo,
-            volumeM3: null,
-            massKg: null,
-            volumeConfidence: null,
-            groupName: null,
-          })),
-      };
-      await applyLocalEdit(loadedShipment.id, patch);
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'shipment_upsert',
-        entityId: loadedShipment.id,
-        baseVersion: loadedShipment.version,
-        payload: null,
-      });
-      void runSync();
+      const currentCode = loadedShipment.status.code as ShipmentStatusCode;
+      const nextCode: ShipmentStatusCode =
+        currentCode === 'confirmed_mol' ? 'confirmed_mol' : 'shipped';
+      await persistStatus(nextCode);
     },
     onSuccess: () => {
       message.success('Отгрузка сохранена');
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+      navigate('/shipments');
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const confirmMol = useMutation({
+    mutationFn: async () => {
+      await persistStatus('confirmed_mol');
+    },
+    onSuccess: () => {
+      message.success('Отгрузка подтверждена МОЛ');
       void queryClient.invalidateQueries({ queryKey: ['shipments'] });
       navigate('/shipments');
     },
@@ -673,72 +707,104 @@ export default function ShipmentPage() {
           ]}
         />
 
-        {isDesktop ? (
-          <div
-            style={{
-              position: 'sticky',
-              bottom: 0,
-              marginTop: 8,
-              padding: '12px 0',
-              background: '#f5f5f5',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: 8,
-              zIndex: 5,
-            }}
-          >
-            <Button onClick={() => navigate('/shipments')}>Отмена</Button>
-            <Tooltip title={verifyReason ?? ''} placement="top">
-              <span style={{ display: 'inline-flex' }}>
-                <Button
-                  type="primary"
-                  loading={save.isPending}
-                  disabled={!!verifyReason}
-                  onClick={() => save.mutate()}
-                >
-                  Сохранить
-                </Button>
-              </span>
-            </Tooltip>
-          </div>
-        ) : (
-          <div
-            style={{
-              position: 'fixed',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              padding: 12,
-              background: '#fff',
-              borderTop: '1px solid #f0f0f0',
-              zIndex: 100,
-              display: 'flex',
-              gap: 8,
-            }}
-          >
-            <Button
-              size="large"
-              style={{ flex: 1 }}
-              onClick={() => navigate('/shipments')}
+        {(() => {
+          const isConfirmed = loadedShipment.status.code === 'confirmed_mol';
+          const confirmTooltip = isConfirmed
+            ? `Подтверждено: ${loadedShipment.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedShipment.confirmedByMolAt)}`
+            : (verifyReason ?? 'Подтвердить документ как МОЛ');
+          const saveDisabled = !!verifyReason;
+          const confirmDisabled = isConfirmed || !!verifyReason;
+          return isDesktop ? (
+            <div
+              style={{
+                position: 'sticky',
+                bottom: 0,
+                marginTop: 8,
+                padding: '12px 0',
+                background: '#f5f5f5',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                zIndex: 5,
+              }}
             >
-              Отмена
-            </Button>
-            <Tooltip title={verifyReason ?? ''} placement="top">
-              <span style={{ flex: 1, display: 'inline-flex' }}>
-                <Button
-                  type="primary"
-                  size="large"
-                  style={{ flex: 1 }}
-                  loading={save.isPending}
-                  disabled={!!verifyReason}
-                  onClick={() => save.mutate()}
-                >
-                  Сохранить
-                </Button>
-              </span>
-            </Tooltip>
-          </div>
-        )}
+              <Button onClick={() => navigate('/shipments')}>Отмена</Button>
+              <Tooltip title={verifyReason ?? ''} placement="top">
+                <span style={{ display: 'inline-flex' }}>
+                  <Button
+                    type="primary"
+                    loading={save.isPending}
+                    disabled={saveDisabled}
+                    onClick={() => save.mutate()}
+                  >
+                    Сохранить
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={confirmTooltip} placement="top">
+                <span style={{ display: 'inline-flex' }}>
+                  <Button
+                    loading={confirmMol.isPending}
+                    disabled={confirmDisabled}
+                    onClick={() => confirmMol.mutate()}
+                  >
+                    Подтвердить МОЛ
+                  </Button>
+                </span>
+              </Tooltip>
+            </div>
+          ) : (
+            <div
+              style={{
+                position: 'fixed',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                padding: 12,
+                background: '#fff',
+                borderTop: '1px solid #f0f0f0',
+                zIndex: 100,
+                display: 'flex',
+                gap: 8,
+              }}
+            >
+              <Button
+                size="large"
+                style={{ flex: 1 }}
+                onClick={() => navigate('/shipments')}
+              >
+                Отмена
+              </Button>
+              <Tooltip title={verifyReason ?? ''} placement="top">
+                <span style={{ flex: 1, display: 'inline-flex' }}>
+                  <Button
+                    type="primary"
+                    size="large"
+                    style={{ flex: 1 }}
+                    loading={save.isPending}
+                    disabled={saveDisabled}
+                    onClick={() => save.mutate()}
+                  >
+                    Сохранить
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={confirmTooltip} placement="top">
+                <span style={{ flex: 1, display: 'inline-flex' }}>
+                  <Button
+                    size="large"
+                    style={{ flex: 1 }}
+                    loading={confirmMol.isPending}
+                    disabled={confirmDisabled}
+                    onClick={() => confirmMol.mutate()}
+                  >
+                    Подтвердить МОЛ
+                  </Button>
+                </span>
+              </Tooltip>
+            </div>
+          );
+        })()}
       </Space>
     );
   }

@@ -75,6 +75,19 @@ type ListTab = 'expected' | 'accepted';
 const trimQty = (s: string) =>
   s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 
+function formatMolDate(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+}
+
 function newKey(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -347,54 +360,76 @@ export default function KppPage() {
     ]);
   };
 
+  const buildPatch = (nextCode: DeliveryStatusCode): Partial<Delivery> => {
+    if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
+    const nextStatus: Status = { ...loadedDelivery.status, code: nextCode };
+    return {
+      status: nextStatus,
+      siteId: siteId ?? loadedDelivery.siteId,
+      supplierId: selectedUpd?.supplierId ?? loadedDelivery.supplierId ?? null,
+      contractorId,
+      vehiclePlate: plate || null,
+      arrivedAt: loadedDelivery.arrivedAt ?? new Date().toISOString(),
+      comment: comment || null,
+      sourceDocumentIds: selectedUpd
+        ? [selectedUpd.id]
+        : loadedDelivery.sourceDocumentIds,
+      items: items
+        .filter((i) => i.nameRaw.trim().length > 0)
+        .map((i) => ({
+          id: crypto.randomUUID(),
+          materialId: i.materialId,
+          nameRaw: i.nameRaw,
+          qtyPlanned: i.qtyPlanned,
+          qtyActual: i.qtyActual,
+          unit: i.unit,
+          comment: null,
+          lineNo: i.lineNo,
+          volumeM3: i.volumeM3,
+          massKg: i.massKg,
+          volumeConfidence: i.volumeConfidence,
+          groupName: i.groupName,
+        })),
+    };
+  };
+
+  const persistStatus = async (nextCode: DeliveryStatusCode) => {
+    if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
+    await applyLocalEdit(loadedDelivery.id, buildPatch(nextCode));
+    await enqueueMutation({
+      id: crypto.randomUUID(),
+      kind: 'delivery_upsert',
+      entityId: loadedDelivery.id,
+      baseVersion: loadedDelivery.version,
+      payload: null,
+    });
+    void runSync();
+  };
+
   const save = useMutation({
     mutationFn: async () => {
       if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
-      // Локальный patch: status.code = 'filled' (полный Status придёт с сервера в pullSync).
-      const nextStatus: Status = {
-        ...loadedDelivery.status,
-        code: 'filled' satisfies DeliveryStatusCode,
-      };
-      const patch: Partial<Delivery> = {
-        status: nextStatus,
-        siteId: siteId ?? loadedDelivery.siteId,
-        supplierId: selectedUpd?.supplierId ?? loadedDelivery.supplierId ?? null,
-        contractorId,
-        vehiclePlate: plate || null,
-        arrivedAt: loadedDelivery.arrivedAt ?? new Date().toISOString(),
-        comment: comment || null,
-        sourceDocumentIds: selectedUpd
-          ? [selectedUpd.id]
-          : loadedDelivery.sourceDocumentIds,
-        items: items
-          .filter((i) => i.nameRaw.trim().length > 0)
-          .map((i) => ({
-            id: crypto.randomUUID(),
-            materialId: i.materialId,
-            nameRaw: i.nameRaw,
-            qtyPlanned: i.qtyPlanned,
-            qtyActual: i.qtyActual,
-            unit: i.unit,
-            comment: null,
-            lineNo: i.lineNo,
-            volumeM3: i.volumeM3,
-            massKg: i.massKg,
-            volumeConfidence: i.volumeConfidence,
-            groupName: i.groupName,
-          })),
-      };
-      await applyLocalEdit(loadedDelivery.id, patch);
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'delivery_upsert',
-        entityId: loadedDelivery.id,
-        baseVersion: loadedDelivery.version,
-        payload: null,
-      });
-      void runSync();
+      // Обычное «Сохранить» не должно «понижать» подтверждённый документ —
+      // если он уже confirmed_mol, оставляем этот статус.
+      const currentCode = loadedDelivery.status.code as DeliveryStatusCode;
+      const nextCode: DeliveryStatusCode =
+        currentCode === 'confirmed_mol' ? 'confirmed_mol' : 'filled';
+      await persistStatus(nextCode);
     },
     onSuccess: () => {
       message.success('Приёмка сохранена');
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+      navigate('/kpp?tab=accepted');
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const confirmMol = useMutation({
+    mutationFn: async () => {
+      await persistStatus('confirmed_mol');
+    },
+    onSuccess: () => {
+      message.success('Приёмка подтверждена МОЛ');
       void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
       navigate('/kpp?tab=accepted');
     },
@@ -726,74 +761,106 @@ export default function KppPage() {
           ]}
         />
 
-        {isDesktop ? (
-          <div
-            style={{
-              position: 'sticky',
-              bottom: 0,
-              marginTop: 8,
-              padding: '12px 0',
-              background: '#f5f5f5',
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: 8,
-              zIndex: 5,
-            }}
-          >
-            <Button onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}>
-              Отмена
-            </Button>
-            <Tooltip title={verifyReason ?? ''} placement="top">
-              <span style={{ display: 'inline-flex' }}>
-                <Button
-                  type="primary"
-                  loading={save.isPending}
-                  disabled={!!verifyReason}
-                  onClick={() => save.mutate()}
-                >
-                  Сохранить
-                </Button>
-              </span>
-            </Tooltip>
-          </div>
-        ) : (
-          <div
-            style={{
-              position: 'fixed',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              padding: 12,
-              background: '#fff',
-              borderTop: '1px solid #f0f0f0',
-              zIndex: 100,
-              display: 'flex',
-              gap: 8,
-            }}
-          >
-            <Button
-              size="large"
-              style={{ flex: 1 }}
-              onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}
+        {(() => {
+          const isConfirmed = loadedDelivery.status.code === 'confirmed_mol';
+          const confirmTooltip = isConfirmed
+            ? `Подтверждено: ${loadedDelivery.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedDelivery.confirmedByMolAt)}`
+            : (verifyReason ?? 'Подтвердить документ как МОЛ');
+          const saveDisabled = !!verifyReason;
+          const confirmDisabled = isConfirmed || !!verifyReason;
+          return isDesktop ? (
+            <div
+              style={{
+                position: 'sticky',
+                bottom: 0,
+                marginTop: 8,
+                padding: '12px 0',
+                background: '#f5f5f5',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                zIndex: 5,
+              }}
             >
-              Отмена
-            </Button>
-            <Tooltip title={verifyReason ?? ''} placement="top">
-              <span style={{ flex: 1, display: 'inline-flex' }}>
-                <Button
-                  type="primary"
-                  size="large"
-                  style={{ flex: 1 }}
-                  loading={save.isPending}
-                  disabled={!!verifyReason}
-                  onClick={() => save.mutate()}
-                >
-                  Сохранить
-                </Button>
-              </span>
-            </Tooltip>
-          </div>
-        )}
+              <Button onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}>
+                Отмена
+              </Button>
+              <Tooltip title={verifyReason ?? ''} placement="top">
+                <span style={{ display: 'inline-flex' }}>
+                  <Button
+                    type="primary"
+                    loading={save.isPending}
+                    disabled={saveDisabled}
+                    onClick={() => save.mutate()}
+                  >
+                    Сохранить
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={confirmTooltip} placement="top">
+                <span style={{ display: 'inline-flex' }}>
+                  <Button
+                    loading={confirmMol.isPending}
+                    disabled={confirmDisabled}
+                    onClick={() => confirmMol.mutate()}
+                  >
+                    Подтвердить МОЛ
+                  </Button>
+                </span>
+              </Tooltip>
+            </div>
+          ) : (
+            <div
+              style={{
+                position: 'fixed',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                padding: 12,
+                background: '#fff',
+                borderTop: '1px solid #f0f0f0',
+                zIndex: 100,
+                display: 'flex',
+                gap: 8,
+              }}
+            >
+              <Button
+                size="large"
+                style={{ flex: 1 }}
+                onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}
+              >
+                Отмена
+              </Button>
+              <Tooltip title={verifyReason ?? ''} placement="top">
+                <span style={{ flex: 1, display: 'inline-flex' }}>
+                  <Button
+                    type="primary"
+                    size="large"
+                    style={{ flex: 1 }}
+                    loading={save.isPending}
+                    disabled={saveDisabled}
+                    onClick={() => save.mutate()}
+                  >
+                    Сохранить
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={confirmTooltip} placement="top">
+                <span style={{ flex: 1, display: 'inline-flex' }}>
+                  <Button
+                    size="large"
+                    style={{ flex: 1 }}
+                    loading={confirmMol.isPending}
+                    disabled={confirmDisabled}
+                    onClick={() => confirmMol.mutate()}
+                  >
+                    Подтвердить МОЛ
+                  </Button>
+                </span>
+              </Tooltip>
+            </div>
+          );
+        })()}
       </Space>
     );
   }

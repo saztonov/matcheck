@@ -19,6 +19,7 @@ import {
   sourceDocumentItems,
   sourceDocuments,
   statuses,
+  users,
 } from '../db/schema.js';
 
 const QuerySchema = z.object({
@@ -79,9 +80,10 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
       const inspectorOnly = req.user?.role === 'inspector_kpp';
       const inspectorId = req.user?.id;
       const dRowsJoined = await app.db
-        .select({ d: deliveries, s: statuses })
+        .select({ d: deliveries, s: statuses, molEmail: users.email })
         .from(deliveries)
         .innerJoin(statuses, eq(deliveries.statusId, statuses.id))
+        .leftJoin(users, eq(deliveries.confirmedByMolUserId, users.id))
         .where(
           inspectorOnly && inspectorId
             ? since
@@ -93,7 +95,7 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
         )
         .orderBy(desc(deliveries.updatedAt))
         .limit(500);
-      const dRows = dRowsJoined.map((r) => ({ ...r.d, _status: r.s }));
+      const dRows = dRowsJoined.map((r) => ({ ...r.d, _status: r.s, _molEmail: r.molEmail }));
       const dIds = dRows.map((r) => r.id);
       const dItems = dIds.length
         ? await app.db.select().from(deliveryItems).where(sql_in(deliveryItems.deliveryId, dIds))
@@ -110,9 +112,10 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
 
       // ── Shipments (симметрично deliveries) ──
       const shRowsJoined = await app.db
-        .select({ s: shipments, st: statuses })
+        .select({ s: shipments, st: statuses, molEmail: users.email })
         .from(shipments)
         .innerJoin(statuses, eq(shipments.statusId, statuses.id))
+        .leftJoin(users, eq(shipments.confirmedByMolUserId, users.id))
         .where(
           inspectorOnly && inspectorId
             ? since
@@ -124,7 +127,7 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
         )
         .orderBy(desc(shipments.updatedAt))
         .limit(500);
-      const shRows = shRowsJoined.map((r) => ({ ...r.s, _status: r.st }));
+      const shRows = shRowsJoined.map((r) => ({ ...r.s, _status: r.st, _molEmail: r.molEmail }));
       const shIds = shRows.map((r) => r.id);
       const shItems = shIds.length
         ? await app.db.select().from(shipmentItems).where(sql_in(shipmentItems.shipmentId, shIds))
@@ -259,6 +262,9 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           arrivedAt: d.arrivedAt?.toISOString() ?? null,
           inspectorId: d.inspectorId,
           comment: d.comment,
+          confirmedByMolUserId: d.confirmedByMolUserId,
+          confirmedByMolUserEmail: d._molEmail,
+          confirmedByMolAt: d.confirmedByMolAt?.toISOString() ?? null,
           version: d.version,
           sourceDocumentIds: dSources
             .filter((s) => s.deliveryId === d.id)
@@ -311,6 +317,9 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           shippedAt: s.shippedAt?.toISOString() ?? null,
           inspectorId: s.inspectorId,
           comment: s.comment,
+          confirmedByMolUserId: s.confirmedByMolUserId,
+          confirmedByMolUserEmail: s._molEmail,
+          confirmedByMolAt: s.confirmedByMolAt?.toISOString() ?? null,
           version: s.version,
           sourceDocumentIds: shSources
             .filter((x) => x.shipmentId === s.id)
