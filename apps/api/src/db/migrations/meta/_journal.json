@@ -155,6 +155,13 @@
       "when": 1780531260000,
       "tag": "0021_provider_legacy_fields_nullable",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1780617660000,
+      "tag": "0022_reports_views_confirmed_mol",
+      "breakpoints": true
     }
   ]
 }

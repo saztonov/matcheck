@@ -182,7 +182,10 @@ export async function reportRoutes(rawApp: FastifyInstance): Promise<void> {
       const from = safeTimestamp(dateFrom);
       const to = safeTimestamp(dateTo);
 
-      const where: string[] = [`st.entity_type = 'delivery'`, `st.code = 'filled'`];
+      const where: string[] = [
+        `st.entity_type = 'delivery'`,
+        `st.code IN ('filled', 'confirmed_mol')`,
+      ];
       if (sId) where.push(`d.site_id = '${sId}'::uuid`);
       if (from) where.push(`COALESCE(d.arrived_at, d.updated_at) >= '${from}'::timestamptz`);
       if (to) where.push(`COALESCE(d.arrived_at, d.updated_at) <= '${to}'::timestamptz`);
@@ -213,7 +216,9 @@ export async function reportRoutes(rawApp: FastifyInstance): Promise<void> {
           d.contractor_id AS "contractorId",
           con.name AS "contractorName",
           sd.doc_number AS "docNumber",
-          sd.doc_date AS "docDate"
+          sd.doc_date AS "docDate",
+          st.code AS "statusCode",
+          st.label AS "statusLabel"
         FROM delivery_items di
         JOIN deliveries d ON d.id = di.delivery_id
         JOIN statuses st ON st.id = d.status_id
@@ -266,6 +271,8 @@ export async function reportRoutes(rawApp: FastifyInstance): Promise<void> {
           contractorName: (r.contractorName as string | null) ?? null,
           docNumber: (r.docNumber as string | null) ?? null,
           docDate: maybeDocDate(r.docDate),
+          statusCode: String(r.statusCode),
+          statusLabel: String(r.statusLabel),
         })),
         total: Number(totalRows[0]?.count ?? 0),
       };
@@ -289,7 +296,10 @@ export async function reportRoutes(rawApp: FastifyInstance): Promise<void> {
       const from = safeTimestamp(dateFrom);
       const to = safeTimestamp(dateTo);
 
-      const where: string[] = [`st.entity_type = 'shipment'`, `st.code = 'shipped'`];
+      const where: string[] = [
+        `st.entity_type = 'shipment'`,
+        `st.code IN ('shipped', 'confirmed_mol')`,
+      ];
       if (sId) where.push(`s.site_id = '${sId}'::uuid`);
       if (k) where.push(`s.kind = '${k}'::shipment_kind`);
       if (from) where.push(`COALESCE(s.shipped_at, s.updated_at) >= '${from}'::timestamptz`);
@@ -322,7 +332,9 @@ export async function reportRoutes(rawApp: FastifyInstance): Promise<void> {
           COALESCE(si2.qty_actual, si2.qty_planned)::text AS "qty",
           si2.unit AS "unit",
           sd.doc_number AS "docNumber",
-          sd.doc_date AS "docDate"
+          sd.doc_date AS "docDate",
+          st.code AS "statusCode",
+          st.label AS "statusLabel"
         FROM shipment_items si2
         JOIN shipments s ON s.id = si2.shipment_id
         JOIN statuses st ON st.id = s.status_id
@@ -376,6 +388,8 @@ export async function reportRoutes(rawApp: FastifyInstance): Promise<void> {
           unit: String(r.unit),
           docNumber: (r.docNumber as string | null) ?? null,
           docDate: maybeDocDate(r.docDate),
+          statusCode: String(r.statusCode),
+          statusLabel: String(r.statusLabel),
         })),
         total: Number(totalRows[0]?.count ?? 0),
       };

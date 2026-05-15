@@ -23,6 +23,14 @@ const KIND_LABELS: Record<ShipmentKind, { label: string; color: string }> = {
   writeoff: { label: 'Списание', color: 'volcano' },
 };
 
+const STATUS_COLOR: Record<string, string> = {
+  filled: 'green',
+  shipped: 'green',
+  confirmed_mol: 'blue',
+};
+
+const statusTagColor = (code: string) => STATUS_COLOR[code] ?? 'default';
+
 const formatDocDate = (v: string | null) =>
   v ? v.split('-').reverse().join('.') : '—';
 
@@ -229,6 +237,14 @@ function IntakeTab() {
             render: (v: string | null) => formatDocDate(v),
             width: 110,
           },
+          {
+            title: 'Статус',
+            key: 'status',
+            width: 160,
+            render: (_, r) => (
+              <Tag color={statusTagColor(r.statusCode)}>{r.statusLabel}</Tag>
+            ),
+          },
         ]}
         cardRender={(r) => (
           <div style={{ width: '100%' }}>
@@ -247,6 +263,9 @@ function IntakeTab() {
                 : '—'}{' '}
               · {r.supplierName ?? '—'}
             </Typography.Text>
+            <Tag color={statusTagColor(r.statusCode)} style={{ marginTop: 4 }}>
+              {r.statusLabel}
+            </Tag>
           </div>
         )}
       />
@@ -355,6 +374,14 @@ function ShipmentTab() {
                   ? '—'
                   : r.receiverName ?? '—',
           },
+          {
+            title: 'Статус',
+            key: 'status',
+            width: 160,
+            render: (_, r) => (
+              <Tag color={statusTagColor(r.statusCode)}>{r.statusLabel}</Tag>
+            ),
+          },
         ]}
         cardRender={(r) => (
           <div style={{ width: '100%' }}>
@@ -366,6 +393,7 @@ function ShipmentTab() {
             </Space>
             <Space>
               <Tag color={KIND_LABELS[r.kind].color}>{KIND_LABELS[r.kind].label}</Tag>
+              <Tag color={statusTagColor(r.statusCode)}>{r.statusLabel}</Tag>
               <Typography.Text type="secondary">
                 {r.siteCode} · {r.siteName}
               </Typography.Text>

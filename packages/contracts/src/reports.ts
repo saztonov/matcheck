@@ -43,6 +43,8 @@ export const IntakeJournalRowSchema = z.object({
   contractorName: z.string().nullable(),
   docNumber: z.string().nullable(),
   docDate: z.string().nullable(),
+  statusCode: z.string(),
+  statusLabel: z.string(),
 });
 export type IntakeJournalRow = z.infer<typeof IntakeJournalRowSchema>;
 
@@ -73,6 +75,8 @@ export const ShipmentJournalRowSchema = z.object({
   unit: z.string(),
   docNumber: z.string().nullable(),
   docDate: z.string().nullable(),
+  statusCode: z.string(),
+  statusLabel: z.string(),
 });
 export type ShipmentJournalRow = z.infer<typeof ShipmentJournalRowSchema>;
 
