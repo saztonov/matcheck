@@ -126,9 +126,8 @@ export function DesktopLayout() {
             ) : (
               <>
                 <Typography.Text
-                  type="secondary"
                   ellipsis={{ tooltip: user.email }}
-                  style={{ fontSize: 12 }}
+                  style={{ fontSize: 14 }}
                 >
                   {user.email}
                 </Typography.Text>
