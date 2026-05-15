@@ -34,7 +34,14 @@ export const sourceOriginEnum = pgEnum('source_origin', [
   'manual_pdf',
   'mail',
 ]);
-export const sourceStatusEnum = pgEnum('source_status', ['parsed', 'parse_failed', 'archived']);
+export const sourceStatusEnum = pgEnum('source_status', [
+  'parsed',
+  'parse_failed',
+  'archived',
+  'queued',
+  'processing',
+  'needs_resolution',
+]);
 export const sourceDirectionEnum = pgEnum('source_direction', ['inbound', 'outbound']);
 export const photoKindEnum = pgEnum('photo_kind', ['document', 'cargo', 'vehicle', 'other']);
 export const llmKindEnum = pgEnum('llm_kind', [
@@ -332,6 +339,14 @@ export const sourceDocuments = pgTable(
     llmConfidence: numeric('llm_confidence', { precision: 4, scale: 3 }),
     parsedAt: timestamp('parsed_at', { withTimezone: true }).notNull().defaultNow(),
     parseError: text('parse_error'),
+    parseErrorCode: text('parse_error_code'),
+    parseErrorDetails: jsonb('parse_error_details').$type<Record<string, unknown> | null>(),
+    jobId: text('job_id'),
+    jobAttempts: integer('job_attempts').notNull().default(0),
+    contentHash: varchar('content_hash', { length: 64 }),
+    originalFilename: text('original_filename'),
+    queuedAt: timestamp('queued_at', { withTimezone: true }),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
     validation: jsonb('validation').$type<UpdValidation | null>(),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -360,9 +375,15 @@ export const sourceDocuments = pgTable(
       .on(t.contractorId)
       .where(sql`${t.contractorId} is not null`),
     index('source_site_idx').on(t.siteId).where(sql`${t.siteId} is not null`),
+    index('source_documents_content_hash_idx')
+      .on(t.contractorId, t.contentHash)
+      .where(sql`${t.contentHash} is not null`),
+    index('source_documents_unfinished_idx')
+      .on(t.status, t.parsedAt)
+      .where(sql`${t.status} in ('queued', 'processing')`),
     check(
       'source_upd_required',
-      sql`(${t.kind} <> 'upd') or (${t.docNumber} is not null and ${t.docDate} is not null and ${t.totalSum} is not null)`,
+      sql`(${t.kind} <> 'upd') or (${t.status} <> 'parsed') or (${t.docNumber} is not null and ${t.docDate} is not null and ${t.totalSum} is not null)`,
     ),
   ],
 );
@@ -400,6 +421,38 @@ export const sourceDocumentAttachments = pgTable('source_document_attachments', 
   role: attachmentRoleEnum('role').notNull().default('original'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ─── LLM calls log ─────────────────────────────────────────────────────────
+// Журнал общения с LLM при распознавании документов: хранит сырой запрос и
+// ответ, чтобы диагностировать ошибки распознавания. Доступен только админам.
+
+export const llmCalls = pgTable(
+  'llm_calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    sourceDocumentId: uuid('source_document_id').references(() => sourceDocuments.id, {
+      onDelete: 'cascade',
+    }),
+    providerId: uuid('provider_id').references(() => llmProviders.id, { onDelete: 'set null' }),
+    promptId: uuid('prompt_id').references(() => prompts.id, { onDelete: 'set null' }),
+    docKind: text('doc_kind').notNull(),
+    model: text('model'),
+    requestMessages: jsonb('request_messages').notNull(),
+    requestSchema: jsonb('request_schema'),
+    responseRaw: text('response_raw'),
+    responseParsed: jsonb('response_parsed'),
+    promptTokens: integer('prompt_tokens'),
+    completionTokens: integer('completion_tokens'),
+    latencyMs: integer('latency_ms').notNull(),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('llm_calls_source_doc_idx').on(t.sourceDocumentId, t.createdAt),
+    index('llm_calls_created_at_idx').on(t.createdAt),
+  ],
+);
 
 // ─── Deliveries ────────────────────────────────────────────────────────────
 

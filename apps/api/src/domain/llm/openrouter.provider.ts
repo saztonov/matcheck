@@ -8,7 +8,12 @@ import type {
 
 export class OpenRouterProvider implements LlmProvider {
   readonly kind = 'openrouter' as const;
-  constructor(private readonly cfg: LlmProviderConfig) {}
+  readonly id: string;
+  readonly model: string;
+  constructor(private readonly cfg: LlmProviderConfig) {
+    this.id = cfg.id;
+    this.model = cfg.model;
+  }
 
   async complete<T>(
     req: LlmCompletionRequest,

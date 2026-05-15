@@ -164,7 +164,8 @@ chmod 700 /srv/matcheck/secrets
 - `mem_limit` на каждый сервис (RAM на VPS ограничен ~4 GB).
 - `restart: unless-stopped`.
 - `env_file` указывает абсолютным путём на `/srv/matcheck/secrets/api.env` — секреты подхватываются автоматически, отдельный `--env-file` в команде compose **не нужен**.
-- Yandex CA смонтирован в `matcheck-api`: `/srv/matcheck/secrets/yandex-ca/root.crt:/etc/ssl/yandex/root.crt:ro`.
+- Yandex CA смонтирован в `matcheck-api` и `matcheck-worker`: `/srv/matcheck/secrets/yandex-ca/root.crt:/etc/ssl/yandex/root.crt:ro`.
+- `matcheck-worker` — отдельный процесс распознавания УПД (см. [Воркер УПД](#воркер-упд) ниже). Использует тот же образ, что и API, но запускает `src/worker.ts`.
 
 Стартовый запуск:
 
@@ -175,6 +176,39 @@ docker compose -f infra/docker-compose.prod.yml build
 docker compose -f infra/docker-compose.prod.yml up -d
 docker ps --filter 'name=matcheck-' --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
+
+## Воркер УПД
+
+Распознавание загруженных PDF УПД (LLM-запрос на 5–10 минут) идёт в фоне
+отдельным процессом `matcheck-worker`, чтобы не блокировать event-loop API.
+
+- **Очередь**: BullMQ поверх Redis. Имя очереди — `upd-parse`.
+- **Процесс**: контейнер `matcheck-worker` (тот же образ, что у API,
+  команда `tsx src/worker.ts`).
+- **Concurrency**: 2 параллельных распознавания.
+- **Retry**: 3 попытки с экспоненциальной задержкой (1 мин, 2 мин, 4 мин).
+- **Recovery**: при старте воркер ищет документы в статусе `processing`
+  старше 10 мин (выжившие после краша) и возвращает их в очередь.
+
+Просмотр логов:
+
+```bash
+# [matcheck@mosgate:/srv/matcheck/app]$
+docker compose -f infra/docker-compose.prod.yml logs -f --tail=100 matcheck-worker
+```
+
+Ручной перезапуск:
+
+```bash
+# [matcheck@mosgate:/srv/matcheck/app]$
+docker compose -f infra/docker-compose.prod.yml restart matcheck-worker
+```
+
+Диагностика конкретного документа — `GET /api/v1/source-documents/:id/llm-calls`
+(админ-only) или соответствующая кнопка «Логи распознавания» в карточке
+документа на фронте. В таблице `llm_calls` хранится сырой запрос и сырой
+ответ провайдера для каждого вызова, что упрощает отладку, если модель
+вернула некорректный JSON или перепутала колонки.
 
 ## NGINX
 

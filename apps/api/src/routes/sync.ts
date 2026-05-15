@@ -194,6 +194,19 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           llmProviderId: sd.llmProviderId,
           llmConfidence: sd.llmConfidence,
           parsedAt: sd.parsedAt.toISOString(),
+          queuedAt: sd.queuedAt?.toISOString() ?? null,
+          processedAt: sd.processedAt?.toISOString() ?? null,
+          parseErrorCode: (sd.parseErrorCode as
+            | 'duplicate_upd'
+            | 'validation_mismatch'
+            | 'pdf_no_text'
+            | 'parse_failed'
+            | 'internal_error'
+            | null) ?? null,
+          parseErrorDetails: sd.parseErrorDetails ?? null,
+          originalFilename: sd.originalFilename,
+          contentHash: sd.contentHash,
+          jobAttempts: sd.jobAttempts,
           version: sd.version,
           createdAt: sd.createdAt.toISOString(),
           updatedAt: sd.updatedAt.toISOString(),

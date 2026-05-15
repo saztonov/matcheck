@@ -59,6 +59,34 @@ services:
         max-size: "20m"
         max-file: "5"
 
+  matcheck-worker:
+    # Отдельный процесс распознавания УПД-PDF через LLM. Использует тот же
+    # образ, что и API, но запускает src/worker.ts (BullMQ Worker). Изоляция
+    # нужна, чтобы 5–10-минутные LLM-вызовы не блокировали event-loop API
+    # и его HTTP healthcheck.
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    image: matcheck-matcheck-api
+    container_name: matcheck-worker
+    restart: unless-stopped
+    env_file:
+      - /srv/matcheck/secrets/api.env
+    networks: [matcheck-net]
+    volumes:
+      - /srv/matcheck/secrets/yandex-ca/root.crt:/etc/ssl/yandex/root.crt:ro
+    depends_on:
+      matcheck-redis:
+        condition: service_healthy
+    mem_limit: 500m
+    cpus: 1.0
+    command: ["node_modules/.bin/tsx", "src/worker.ts"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
   matcheck-web:
     build:
       context: ..

@@ -49,6 +49,17 @@ export async function presign({
   return signed.url;
 }
 
+export async function getObject(key: string): Promise<Buffer> {
+  const url = new URL(`${endpoint()}/${env.S3_BUCKET}/${key}`);
+  const res = await getClient().fetch(url, { method: 'GET' });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`S3 GET ${key} failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+  }
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
+}
+
 export async function putObject(key: string, body: Buffer, contentType: string): Promise<void> {
   const url = new URL(`${endpoint()}/${env.S3_BUCKET}/${key}`);
   const res = await getClient().fetch(url, {

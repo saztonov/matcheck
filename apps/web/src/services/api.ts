@@ -133,9 +133,18 @@ export const api = {
 export async function apiUploadFile<T>(
   path: string,
   file: File,
-  opts: { fieldName?: string; signal?: AbortSignal } = {},
+  opts: {
+    fieldName?: string;
+    signal?: AbortSignal;
+    fields?: Record<string, string>;
+  } = {},
 ): Promise<T> {
   const fd = new FormData();
+  // Поля формы — ДО файла: @fastify/multipart их корректно читает только
+  // если они идут впереди файла в потоке.
+  for (const [k, v] of Object.entries(opts.fields ?? {})) {
+    fd.append(k, v);
+  }
   fd.append(opts.fieldName ?? 'file', file, file.name);
   return request<T>(path, { method: 'POST', body: fd, signal: opts.signal });
 }

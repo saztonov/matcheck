@@ -22,6 +22,8 @@ export type LlmCompletionResult<T> = {
 
 export interface LlmProvider {
   readonly kind: 'openrouter' | 'google_ai_studio' | 'qwen_self_hosted' | 'vertex';
+  readonly id: string;
+  readonly model: string;
   complete<T>(req: LlmCompletionRequest, schema: z.ZodType<T>): Promise<LlmCompletionResult<T>>;
   testConnection(): Promise<{ ok: boolean; output?: string; error?: string }>;
 }

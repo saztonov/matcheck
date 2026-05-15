@@ -282,14 +282,15 @@ export function parseUpdText(text: string): UpdPdfParsed {
       if (!data || !curRef) return;
       const nameRaw = curRef.nameParts.join(' ').replace(/\s+/g, ' ').trim();
       if (nameRaw.length === 0) return;
+      // vatRate / vatSum локально мы тоже распознаём, но в контракт
+      // UpdPdfItemSchema они больше не входят — бизнесу не нужны и
+      // только зашумляют дальнейшую сверку.
       items.push({
         nameRaw,
         qty: data.qty,
         unit: data.unit || 'шт',
         price: data.price,
         sum: data.sum,
-        vatRate: data.vatRate,
-        vatSum: data.vatSum,
       });
     };
 

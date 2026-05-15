@@ -7,11 +7,11 @@
 #
 # Делает:
 #   1. git pull
-#   2. docker compose build matcheck-api matcheck-web
+#   2. docker compose build matcheck-api matcheck-web matcheck-worker
 #   3. migrations-status.ts  (read-only, точка отсчёта)
 #   4. migrate.ts            (применяет pending-миграции)
 #   5. migrations-status.ts  (контрольный замер)
-#   6. docker compose up -d --force-recreate matcheck-api matcheck-web
+#   6. docker compose up -d --force-recreate matcheck-api matcheck-web matcheck-worker
 #
 # Печатает в конце таблицу-сводку: коммит, статус сборки, сколько миграций
 # применено (X из Y) и список их тегов, статус контейнеров.
@@ -62,8 +62,8 @@ main() {
   git log --oneline -1
 
   # ─── 2/6 · build ───
-  step "2/6 · build образов (matcheck-api, matcheck-web)"
-  "${COMPOSE[@]}" build matcheck-api matcheck-web
+  step "2/6 · build образов (matcheck-api, matcheck-web, matcheck-worker)"
+  "${COMPOSE[@]}" build matcheck-api matcheck-web matcheck-worker
 
   # ─── 3/6 · миграции ДО ───
   step "3/6 · миграции — статус ДО"
@@ -90,7 +90,7 @@ main() {
 
   # ─── 6/6 · up -d ───
   step "6/6 · пересоздание контейнеров"
-  "${COMPOSE[@]}" up -d --force-recreate matcheck-api matcheck-web
+  "${COMPOSE[@]}" up -d --force-recreate matcheck-api matcheck-web matcheck-worker
 
   # ─── Сводка ───
   echo
@@ -104,7 +104,7 @@ main() {
     printf "  %s ${GREEN}✓${NC} %s → %s\n"            "$(pad 'Git pull')"       "$COMMIT_BEFORE" "$COMMIT_AFTER"
   fi
 
-  printf "  %s ${GREEN}✓${NC} %s\n"                   "$(pad 'Сборка образов')" "matcheck-api, matcheck-web"
+  printf "  %s ${GREEN}✓${NC} %s\n"                   "$(pad 'Сборка образов')" "matcheck-api, matcheck-web, matcheck-worker"
 
   if (( PENDING_BEFORE == 0 )); then
     printf "  %s ${GREEN}✓${NC} нет новых (всего в БД: %d)\n" "$(pad 'Миграции')" "$APPLIED_AFTER"
@@ -118,7 +118,7 @@ main() {
       "$(pad 'Миграции')" "$PENDING_BEFORE" "$APPLIED_NOW" "$PENDING_AFTER"
   fi
 
-  printf "  %s ${GREEN}✓${NC} matcheck-api, matcheck-web up\n" "$(pad 'Контейнеры')"
+  printf "  %s ${GREEN}✓${NC} matcheck-api, matcheck-web, matcheck-worker up\n" "$(pad 'Контейнеры')"
   echo
   echo "${BOLD}${GREEN}  Деплой завершён успешно${NC}"
   echo

@@ -1,7 +1,24 @@
 import type { MouseEvent } from 'react';
 import { useState } from 'react';
-import { Button, Card, Popconfirm, Segmented, Space, Tabs, Tag, Typography, message } from 'antd';
-import { DeleteOutlined } from '@ant-design/icons';
+import {
+  Button,
+  Card,
+  Popconfirm,
+  Segmented,
+  Space,
+  Spin,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+} from 'antd';
+import {
+  DeleteOutlined,
+  ExclamationCircleOutlined,
+  LoadingOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SourceDirection, SourceDocumentListResponseSchema } from '@matcheck/contracts';
 import type { z } from 'zod';
@@ -11,9 +28,105 @@ import { formatDecimal } from '../../shared/utils/formatDecimal';
 import { UpdPdfUploadModal } from './UpdPdfUploadModal';
 import { UpdXmlUploadModal } from './UpdXmlUploadModal';
 import { SourceDocumentDetailModal } from './SourceDocumentDetailModal';
+import { UpdResolveDuplicateModal } from './UpdResolveDuplicateModal';
 
 type List = z.infer<typeof SourceDocumentListResponseSchema>;
 type Row = List['items'][number];
+
+const UNFINISHED_STATUSES: ReadonlyArray<Row['status']> = [
+  'queued',
+  'processing',
+  'needs_resolution',
+];
+
+function StatusTag({ row, onResolve }: { row: Row; onResolve: (r: Row) => void }) {
+  switch (row.status) {
+    case 'queued':
+      return <Tag color="blue">в очереди</Tag>;
+    case 'processing':
+      return (
+        <Tag color="processing" icon={<LoadingOutlined />}>
+          распознаётся
+        </Tag>
+      );
+    case 'parsed':
+      return <Tag color="green">обработано</Tag>;
+    case 'parse_failed': {
+      const msg =
+        (row.parseErrorDetails as { message?: string } | null)?.message ?? row.parseErrorCode ?? 'ошибка';
+      return (
+        <Tooltip title={msg}>
+          <Tag color="red" icon={<ExclamationCircleOutlined />}>
+            ошибка
+          </Tag>
+        </Tooltip>
+      );
+    }
+    case 'archived':
+      return <Tag>архив</Tag>;
+    case 'needs_resolution':
+      if (row.parseErrorCode === 'duplicate_upd') {
+        return (
+          <Space size={4} wrap>
+            <Tag color="orange">дубликат</Tag>
+            <Button
+              size="small"
+              type="link"
+              onClick={(e) => {
+                e.stopPropagation();
+                onResolve(row);
+              }}
+            >
+              разрешить
+            </Button>
+          </Space>
+        );
+      }
+      return (
+        <Space size={4} wrap>
+          <Tooltip
+            title={
+              (row.parseErrorDetails as { failedChecks?: unknown[] } | null)?.failedChecks
+                ? 'Суммы по позициям не сходятся с шапкой документа'
+                : undefined
+            }
+          >
+            <Tag color="gold">суммы не сходятся</Tag>
+          </Tooltip>
+          <Button
+            size="small"
+            type="link"
+            onClick={(e) => {
+              e.stopPropagation();
+              onResolve(row);
+            }}
+          >
+            проверить
+          </Button>
+        </Space>
+      );
+    default:
+      return <Tag>{row.status}</Tag>;
+  }
+}
+
+function ConfidenceCell({ row }: { row: Row }) {
+  if (row.status === 'queued' || row.status === 'processing') {
+    return <Typography.Text type="secondary">—</Typography.Text>;
+  }
+  const c = row.llmConfidence != null ? Number(row.llmConfidence) : null;
+  const hasMismatch = row.validation?.hasMismatch === true;
+  return (
+    <Space size={4}>
+      {c != null ? <span>{Math.round(c * 100)}%</span> : <span>—</span>}
+      {hasMismatch && (
+        <Tooltip title="Сумма по позициям не сходится с шапкой">
+          <WarningOutlined style={{ color: '#fa8c16' }} />
+        </Tooltip>
+      )}
+    </Space>
+  );
+}
 
 export default function InboxPage() {
   const [direction, setDirection] = useState<SourceDirection>('inbound');
@@ -21,6 +134,7 @@ export default function InboxPage() {
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [xmlModalOpen, setXmlModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [resolveId, setResolveId] = useState<string | null>(null);
   const qc = useQueryClient();
 
   const list = useQuery({
@@ -29,6 +143,13 @@ export default function InboxPage() {
       const params = new URLSearchParams({ direction });
       if (kind !== 'all') params.set('kind', kind);
       return api.get<List>(`/source-documents?${params.toString()}`);
+    },
+    // Поллинг, пока в выдаче есть «живые» документы (queued/processing/
+    // needs_resolution). Когда всё «обработано» — поллинг останавливается.
+    refetchInterval: (q) => {
+      const items = q.state.data?.items ?? [];
+      const hasUnfinished = items.some((x) => UNFINISHED_STATUSES.includes(x.status));
+      return hasUnfinished ? 4000 : false;
     },
   });
 
@@ -70,6 +191,18 @@ export default function InboxPage() {
     </Popconfirm>
   );
 
+  const renderDocNumber = (v: string | null, r: Row) => {
+    if (v) return v;
+    if ((r.status === 'queued' || r.status === 'processing') && r.originalFilename) {
+      return (
+        <Typography.Text type="secondary" italic>
+          {r.originalFilename}
+        </Typography.Text>
+      );
+    }
+    return '—';
+  };
+
   return (
     <div>
       <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
@@ -97,6 +230,9 @@ export default function InboxPage() {
           Загрузить УПД (XML)
         </Button>
         <Button onClick={() => setPdfModalOpen(true)}>Загрузить УПД (PDF)</Button>
+        {list.isFetching && !list.isLoading && (
+          <Spin size="small" indicator={<LoadingOutlined spin />} />
+        )}
       </Space>
       <ResponsiveTable<Row>
         items={list.data?.items ?? []}
@@ -111,8 +247,20 @@ export default function InboxPage() {
               <Tag color={k === 'upd' ? 'blue' : 'gold'}>{k === 'upd' ? 'УПД' : 'Заявка'}</Tag>
             ),
           },
-          { title: '№', dataIndex: 'docNumber' },
-          { title: 'Дата', dataIndex: 'docDate' },
+          {
+            title: 'Статус',
+            dataIndex: 'status',
+            render: (_: unknown, r: Row) => (
+              <StatusTag row={r} onResolve={(row) => setResolveId(row.id)} />
+            ),
+          },
+          {
+            title: 'Уверенность',
+            dataIndex: 'llmConfidence',
+            render: (_: unknown, r: Row) => <ConfidenceCell row={r} />,
+          },
+          { title: '№', dataIndex: 'docNumber', render: renderDocNumber },
+          { title: 'Дата', dataIndex: 'docDate', render: (v: string | null) => v ?? '—' },
           {
             title: 'Объект',
             dataIndex: 'siteName',
@@ -148,12 +296,20 @@ export default function InboxPage() {
         cardRender={(r) => (
           <Card style={{ width: '100%' }} size="small">
             <Space direction="vertical" size={2} style={{ width: '100%', position: 'relative' }}>
-              <Tag color={r.kind === 'upd' ? 'blue' : 'gold'}>
-                {r.kind === 'upd' ? 'УПД' : 'Заявка'}
-              </Tag>
-              <Typography.Text strong>{r.docNumber ?? '— без номера —'}</Typography.Text>
+              <Space size={4} wrap>
+                <Tag color={r.kind === 'upd' ? 'blue' : 'gold'}>
+                  {r.kind === 'upd' ? 'УПД' : 'Заявка'}
+                </Tag>
+                <StatusTag row={r} onResolve={(row) => setResolveId(row.id)} />
+              </Space>
+              <Typography.Text strong>
+                {r.docNumber ?? (r.originalFilename ? r.originalFilename : '— без номера —')}
+              </Typography.Text>
               <Typography.Text type="secondary">
                 {r.docDate ?? '—'} · {formatDecimal(r.totalSum) || '—'} ₽
+                {r.llmConfidence != null
+                  ? ` · уверенность ${Math.round(Number(r.llmConfidence) * 100)}%`
+                  : ''}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {r.siteName ?? '—'} · {r.contractorName ?? '—'} · {r.supplierName ?? '—'}
@@ -185,6 +341,11 @@ export default function InboxPage() {
         id={selectedId}
         open={!!selectedId}
         onClose={() => setSelectedId(null)}
+      />
+      <UpdResolveDuplicateModal
+        id={resolveId}
+        open={!!resolveId}
+        onClose={() => setResolveId(null)}
       />
     </div>
   );

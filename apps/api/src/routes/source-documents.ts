@@ -1,26 +1,30 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, ilike, sql as drSql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, sql as drSql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import {
+  LlmCallListResponseSchema,
   ManualUpdUploadRequestSchema,
   ManualUpdUploadResponseSchema,
   SourceDocumentDirectionUpdateSchema,
   SourceDocumentListResponseSchema,
   SourceDocumentDetailSchema,
   SourceDocumentFileResponseSchema,
+  UpdAcknowledgeMismatchRequestSchema,
   UpdDuplicateConflictSchema,
-  UpdPdfConfirmRequestSchema,
-  UpdPdfParseResponseSchema,
+  UpdPdfQueueRequestSchema,
+  UpdPdfQueueResponseSchema,
+  UpdResolveDuplicateRequestSchema,
   ErrorResponseSchema,
 } from '@matcheck/contracts';
 import {
   counterparties,
   deliveries,
   deliverySources,
+  llmCalls,
   materials,
   shipmentSources,
   sites,
@@ -29,11 +33,8 @@ import {
   sourceDocumentAttachments,
 } from '../db/schema.js';
 import { parseUpdXml } from '../domain/edo/upd.parser.js';
-import { parseUpdPdf, PdfNoTextError } from '../domain/edo/upd-pdf.parser.js';
-import { parseUpdPdfLocal } from '../domain/edo/upd-pdf-local.parser.js';
 import { validateUpdTotals } from '../domain/edo/upd-validation.js';
-import { copyObject, deleteObject, presign, putObject } from '../domain/storage/s3.signer.js';
-import { getUpdParseMode } from '../domain/settings/app-settings.js';
+import { deleteObject, presign, putObject } from '../domain/storage/s3.signer.js';
 import { resolveStatusId } from '../domain/statuses/lookup.js';
 import { publishEvent } from './events.js';
 
@@ -126,10 +127,54 @@ function sdRow(sd: typeof sourceDocuments.$inferSelect, names: SdNames = {}) {
     llmProviderId: sd.llmProviderId,
     llmConfidence: sd.llmConfidence,
     parsedAt: sd.parsedAt.toISOString(),
+    queuedAt: sd.queuedAt?.toISOString() ?? null,
+    processedAt: sd.processedAt?.toISOString() ?? null,
+    parseErrorCode: (sd.parseErrorCode as
+      | 'duplicate_upd'
+      | 'validation_mismatch'
+      | 'pdf_no_text'
+      | 'parse_failed'
+      | 'internal_error'
+      | null) ?? null,
+    parseErrorDetails: sd.parseErrorDetails ?? null,
+    originalFilename: sd.originalFilename,
+    contentHash: sd.contentHash,
+    jobAttempts: sd.jobAttempts,
     version: sd.version,
     createdAt: sd.createdAt.toISOString(),
     updatedAt: sd.updatedAt.toISOString(),
     validation: sd.validation ?? null,
+  };
+}
+
+function itemDto(i: typeof sourceDocumentItems.$inferSelect) {
+  return {
+    id: i.id,
+    materialId: i.materialId,
+    nameRaw: i.nameRaw,
+    qty: i.qty,
+    unit: i.unit,
+    price: i.price,
+    sum: i.sum,
+    vatRate: i.vatRate,
+    vatSum: i.vatSum,
+    expectedDate: i.expectedDate?.toISOString().slice(0, 10) ?? null,
+    lineNo: i.lineNo,
+    volumeM3: i.volumeM3,
+    massKg: i.massKg,
+    volumeConfidence: i.volumeConfidence as 'low' | 'medium' | 'high' | null,
+    groupName: i.groupName,
+  };
+}
+
+function attachmentDto(a: typeof sourceDocumentAttachments.$inferSelect) {
+  return {
+    id: a.id,
+    s3Key: a.s3Key,
+    filename: a.filename,
+    mimeType: a.mimeType,
+    sizeBytes: a.sizeBytes,
+    role: a.role,
   };
 }
 
@@ -396,31 +441,8 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           contractorName: row.contractorName,
           siteName: row.siteName,
         }),
-        items: items.map((i) => ({
-          id: i.id,
-          materialId: i.materialId,
-          nameRaw: i.nameRaw,
-          qty: i.qty,
-          unit: i.unit,
-          price: i.price,
-          sum: i.sum,
-          vatRate: i.vatRate,
-          vatSum: i.vatSum,
-          expectedDate: i.expectedDate?.toISOString().slice(0, 10) ?? null,
-          lineNo: i.lineNo,
-          volumeM3: i.volumeM3,
-          massKg: i.massKg,
-          volumeConfidence: i.volumeConfidence as 'low' | 'medium' | 'high' | null,
-          groupName: i.groupName,
-        })),
-        attachments: attachments.map((a) => ({
-          id: a.id,
-          s3Key: a.s3Key,
-          filename: a.filename,
-          mimeType: a.mimeType,
-          sizeBytes: a.sizeBytes,
-          role: a.role,
-        })),
+        items: items.map(itemDto),
+        attachments: attachments.map(attachmentDto),
       };
     },
   );
@@ -630,20 +652,30 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
     },
   );
 
-  // ──────────── PDF УПД: parse (без записи в БД) ────────────
+  // ──────────── PDF УПД: загрузка в очередь ────────────
+  // Файл и метаданные принимаются multipart/form-data. Распознавание идёт
+  // в фоне (apps/api/src/worker.ts), модалка на фронте закрывается сразу.
+  // Идемпотентность: повторная загрузка того же файла у того же подрядчика
+  // возвращает существующий документ с alreadyExists=true (нового джоба
+  // не ставим).
   app.post(
-    '/api/v1/source-documents/parse-upd-pdf',
+    '/api/v1/source-documents/upload-upd-pdf',
     {
       preHandler: [app.authenticate, app.authorize('admin', 'manager')],
     },
     async (req, reply) => {
-      const fileData = await (
-        req as unknown as {
-          file: () => Promise<
-            { filename: string; mimetype: string; toBuffer: () => Promise<Buffer> } | undefined
-          >;
-        }
-      ).file();
+      const mp = req as unknown as {
+        file: () => Promise<
+          | {
+              filename: string;
+              mimetype: string;
+              toBuffer: () => Promise<Buffer>;
+              fields: Record<string, { value?: string } | undefined>;
+            }
+          | undefined
+        >;
+      };
+      const fileData = await mp.file();
       if (!fileData) {
         return reply.code(400).send({ error: 'no_file', message: 'PDF не приложен' });
       }
@@ -651,225 +683,482 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
         return reply.code(400).send({ error: 'bad_mime', message: 'Ожидается PDF файл' });
       }
 
+      const rawFields: Record<string, string | undefined> = {};
+      for (const [k, v] of Object.entries(fileData.fields)) {
+        if (v && typeof v === 'object' && 'value' in v && typeof v.value === 'string') {
+          rawFields[k] = v.value;
+        }
+      }
+      const meta = UpdPdfQueueRequestSchema.safeParse(rawFields);
+      if (!meta.success) {
+        return reply.code(400).send({
+          error: 'bad_request',
+          message: meta.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+        });
+      }
+      const { direction, contractorId, siteId } = meta.data;
+
       const buffer = await fileData.toBuffer();
       if (buffer.length === 0) {
         return reply.code(400).send({ error: 'empty_file', message: 'Файл пустой' });
       }
 
-      // Режим парсинга: query-override (для кнопки «Распознать через LLM»),
-      // иначе настройка из таблицы settings (по умолчанию 'llm').
-      const overrideMode = (req.query as { mode?: string } | undefined)?.mode;
-      const effectiveMode =
-        overrideMode === 'local' || overrideMode === 'llm'
-          ? overrideMode
-          : await getUpdParseMode();
-
-      let parseResult;
-      try {
-        parseResult =
-          effectiveMode === 'local'
-            ? await parseUpdPdfLocal(buffer)
-            : await parseUpdPdf(buffer);
-      } catch (err) {
-        if (err instanceof PdfNoTextError) {
-          return reply.code(400).send({
-            error: 'pdf_no_text',
-            message:
-              'PDF не содержит текстового слоя (вероятно скан). Сканы пока не поддерживаются.',
-          });
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        req.log.warn({ err }, 'pdf parse failed');
-        return reply.code(400).send({ error: 'parse_failed', message: msg });
-      }
-
       const contentHash = createHash('sha256').update(buffer).digest('hex');
-      const draftId = randomUUID();
-      const draftS3Key = `documents/_drafts/${draftId}/source.pdf`;
-      try {
-        await putObject(draftS3Key, buffer, 'application/pdf');
-      } catch (err) {
-        req.log.warn({ err }, 'S3 upload draft PDF failed — proceeding without preview');
+
+      // Идемпотентность по (contractor_id, content_hash) среди живых
+      // документов. parse_failed / archived не блокируют повторную загрузку
+      // — пользователь мог исправить файл и хочет попробовать снова.
+      const [existing] = await app.db
+        .select()
+        .from(sourceDocuments)
+        .where(
+          and(
+            eq(sourceDocuments.contractorId, contractorId),
+            eq(sourceDocuments.contentHash, contentHash),
+            inArray(sourceDocuments.status, [
+              'queued',
+              'processing',
+              'parsed',
+              'needs_resolution',
+            ]),
+          ),
+        )
+        .limit(1);
+      if (existing) {
+        const names = await loadSdNames(app, existing);
+        const body = {
+          created: sdRow(existing, names),
+          alreadyExists: true,
+        };
+        return UpdPdfQueueResponseSchema.parse(body);
       }
 
-      const response = {
-        draftS3Key,
-        contentHash,
-        parsed: parseResult.parsed,
-        llmProviderId: parseResult.llmProviderId,
-        llmConfidence: parseResult.parsed.confidence,
-        textLength: parseResult.textLength,
-        parseSource: effectiveMode,
-      };
-      return UpdPdfParseResponseSchema.parse(response);
+      // S3 загрузка перед INSERT — если упадёт, документа в БД не появится.
+      const newId = randomUUID();
+      const s3Key = `documents/${newId}/source.pdf`;
+      try {
+        await putObject(s3Key, buffer, 'application/pdf');
+      } catch (err) {
+        req.log.error({ err }, 's3 putObject failed for upd pdf');
+        return reply.code(503).send({ error: 's3_unavailable', message: 'S3 недоступен' });
+      }
+
+      const now = new Date();
+      const [created] = await app.db
+        .insert(sourceDocuments)
+        .values({
+          id: newId,
+          kind: 'upd',
+          direction,
+          origin: 'manual_pdf',
+          contractorId,
+          siteId,
+          status: 'queued',
+          contentHash,
+          originalFilename: fileData.filename,
+          queuedAt: now,
+          parsedAt: now,
+        })
+        .returning();
+      if (!created) throw new Error('Failed to insert source_document');
+
+      await app.db.insert(sourceDocumentAttachments).values({
+        sourceDocumentId: created.id,
+        s3Key,
+        filename: fileData.filename || 'source.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: buffer.length,
+        role: 'original',
+      });
+
+      const job = await app.queues.updParse.add('parse', {
+        sourceDocumentId: created.id,
+        s3Key,
+      });
+      if (job.id) {
+        await app.db
+          .update(sourceDocuments)
+          .set({ jobId: job.id })
+          .where(eq(sourceDocuments.id, created.id));
+      }
+
+      const names = await loadSdNames(app, created);
+      reply.code(201);
+      return UpdPdfQueueResponseSchema.parse({
+        created: { ...sdRow(created, names), jobAttempts: 0 },
+        alreadyExists: false,
+      });
     },
   );
 
-  // ──────────── PDF УПД: confirm (сохранение после правки) ────────────
+  // ──────────── Разрешение дубликата УПД (needs_resolution+duplicate_upd) ────────────
   app.post(
-    '/api/v1/source-documents/confirm-upd-pdf',
+    '/api/v1/source-documents/:id/resolve-duplicate',
     {
       preHandler: [app.authenticate, app.authorize('admin', 'manager')],
       schema: {
-        body: UpdPdfConfirmRequestSchema,
+        params: z.object({ id: z.string().uuid() }),
+        body: UpdResolveDuplicateRequestSchema,
         response: {
-          201: SourceDocumentDetailSchema,
+          200: SourceDocumentDetailSchema,
+          204: z.object({ ok: z.literal(true) }),
           400: ErrorResponseSchema,
-          409: UpdDuplicateConflictSchema.or(ErrorResponseSchema),
+          404: ErrorResponseSchema,
+          409: ErrorResponseSchema,
         },
       },
     },
     async (req, reply) => {
-      const { draftS3Key, parsed, direction, contractorId, siteId, replaceExistingId } = req.body;
-
-      const supplier = parsed.supplier;
-      const supplierId =
-        supplier && supplier.inn && supplier.name
-          ? await findOrCreateCounterparty(
-              app,
-              { inn: supplier.inn, kpp: supplier.kpp ?? null, name: supplier.name },
-              'supplier',
-            )
-          : null;
-      const recipient = parsed.recipient;
-      const recipientId =
-        recipient && recipient.inn && recipient.name
-          ? await findOrCreateCounterparty(
-              app,
-              { inn: recipient.inn, kpp: recipient.kpp ?? null, name: recipient.name },
-              'customer',
-            )
-          : null;
-
-      const llmProviderId = (req.body as { llmProviderId?: string | null }).llmProviderId ?? null;
-
-      const docDate = parsed.docDate ? new Date(parsed.docDate) : null;
-      const duplicate = await findUpdDuplicate(app, {
-        supplierId,
-        docNumber: parsed.docNumber ?? null,
-        docDate,
-      });
-      if (duplicate && duplicate.id !== replaceExistingId) {
-        return reply.code(409).send(duplicateConflictPayload(duplicate));
+      const [sd] = await app.db
+        .select()
+        .from(sourceDocuments)
+        .where(eq(sourceDocuments.id, req.params.id))
+        .limit(1);
+      if (!sd) return reply.code(404).send({ error: 'not_found' });
+      if (sd.parseErrorCode !== 'duplicate_upd') {
+        return reply.code(400).send({ error: 'not_duplicate', message: 'Документ не в статусе дубликата' });
       }
-      if (duplicate && replaceExistingId === duplicate.id) {
+      const existingId =
+        sd.parseErrorDetails && typeof sd.parseErrorDetails === 'object'
+          ? (sd.parseErrorDetails as { existingId?: string }).existingId ?? null
+          : null;
+      if (req.body.action === 'skip') {
+        // Удаляем загруженный дубль (не существующий оригинал).
         try {
-          await deleteUpdWithRefsCheck(app, duplicate.id, req.log);
+          await deleteUpdWithRefsCheck(app, sd.id, req.log);
         } catch (err) {
           if (err instanceof HasReferencesError) {
             return reply.code(409).send({ error: 'has_references', message: err.message });
           }
           throw err;
         }
+        return reply.code(204).send({ ok: true as const });
       }
 
-      const validation = validateUpdTotals({
-        totalSum: parsed.totalSum,
-        vatSum: parsed.vatSum,
-        itemsCount: parsed.itemsCount,
-        items: parsed.items,
+      // 'replace': удаляем старый документ (если нет ссылок), а новый
+      // отправляем обратно в очередь — он добежит до конца и сохранит данные.
+      if (!existingId) {
+        return reply
+          .code(400)
+          .send({ error: 'bad_request', message: 'В деталях ошибки нет existingId' });
+      }
+      try {
+        await deleteUpdWithRefsCheck(app, existingId, req.log);
+      } catch (err) {
+        if (err instanceof HasReferencesError) {
+          return reply.code(409).send({ error: 'has_references', message: err.message });
+        }
+        throw err;
+      }
+
+      // Найдём S3-ключ оригинального PDF (он остался в attachments дубля).
+      const att = await findOriginalAttachment(app, sd.id);
+      if (!att) {
+        return reply.code(400).send({ error: 'no_attachment', message: 'Файл не найден' });
+      }
+      await app.db
+        .update(sourceDocuments)
+        .set({
+          status: 'queued',
+          parseErrorCode: null,
+          parseErrorDetails: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(sourceDocuments.id, sd.id));
+      await app.queues.updParse.add('parse', {
+        sourceDocumentId: sd.id,
+        s3Key: att.s3Key,
       });
 
-      const [created] = await app.db
-        .insert(sourceDocuments)
-        .values({
-          kind: 'upd',
-          direction,
-          origin: 'manual_pdf',
-          supplierId,
-          recipientId,
-          contractorId,
-          siteId,
-          docNumber: parsed.docNumber ?? null,
-          docDate,
-          totalSum: parsed.totalSum != null ? parsed.totalSum.toString() : null,
-          vatSum: parsed.vatSum != null ? parsed.vatSum.toString() : null,
-          llmProviderId,
-          llmConfidence: parsed.confidence.toString(),
-          validation,
-          status: 'parsed',
-        })
-        .returning();
-      if (!created) throw new Error('Failed to insert source_document');
+      const [refetched] = await app.db
+        .select()
+        .from(sourceDocuments)
+        .where(eq(sourceDocuments.id, sd.id))
+        .limit(1);
+      if (!refetched) throw new Error('Failed to refetch source_document');
+      const names = await loadSdNames(app, refetched);
+      return SourceDocumentDetailSchema.parse({
+        ...sdRow(refetched, names),
+        items: [],
+        attachments: [
+          {
+            id: att.id,
+            s3Key: att.s3Key,
+            filename: att.filename,
+            mimeType: att.mimeType,
+            sizeBytes: att.sizeBytes,
+            role: att.role,
+          },
+        ],
+      });
+    },
+  );
 
-      if (parsed.items.length) {
-        const itemsWithMaterial = await Promise.all(
-          parsed.items.map(async (it, idx) => ({
-            sourceDocumentId: created.id,
-            materialId: await findOrCreateMaterial(app, { name: it.nameRaw, unit: it.unit }),
-            nameRaw: it.nameRaw,
-            qty: it.qty.toString(),
-            unit: it.unit,
-            price: it.price != null ? it.price.toString() : null,
-            sum: it.sum != null ? it.sum.toString() : null,
-            vatRate: it.vatRate != null ? it.vatRate.toString() : null,
-            vatSum: it.vatSum != null ? it.vatSum.toString() : null,
-            volumeM3: it.volumeM3 != null ? it.volumeM3.toString() : null,
-            massKg: it.massKg != null ? it.massKg.toString() : null,
-            volumeConfidence: it.volumeConfidence ?? null,
-            groupName: it.groupName ?? null,
-            lineNo: idx + 1,
-          })),
-        );
-        await app.db.insert(sourceDocumentItems).values(itemsWithMaterial);
-      }
-
-      // Перемещаем draft → final S3-ключ
-      const finalS3Key = `documents/${created.id}/source.pdf`;
-      try {
-        await copyObject(draftS3Key, finalS3Key);
-        await deleteObject(draftS3Key);
-        await app.db.insert(sourceDocumentAttachments).values({
-          sourceDocumentId: created.id,
-          s3Key: finalS3Key,
-          filename: 'source.pdf',
-          mimeType: 'application/pdf',
-          role: 'original',
+  // ──────────── Принять расхождение сумм (needs_resolution+validation_mismatch) ────────────
+  // Пользователь видел alert «суммы не сходятся», убедился, что в исходной
+  // накладной так и должно быть (например, округление), и подтверждает
+  // документ как есть. Сами поля validation/totalSum не меняются — только
+  // статус и parse_error_code.
+  app.post(
+    '/api/v1/source-documents/:id/acknowledge-mismatch',
+    {
+      preHandler: [app.authenticate, app.authorize('admin', 'manager')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: UpdAcknowledgeMismatchRequestSchema,
+        response: {
+          200: SourceDocumentDetailSchema,
+          400: ErrorResponseSchema,
+          404: ErrorResponseSchema,
+        },
+      },
+    },
+    async (req, reply) => {
+      const [sd] = await app.db
+        .select()
+        .from(sourceDocuments)
+        .where(eq(sourceDocuments.id, req.params.id))
+        .limit(1);
+      if (!sd) return reply.code(404).send({ error: 'not_found' });
+      if (sd.parseErrorCode !== 'validation_mismatch') {
+        return reply.code(400).send({
+          error: 'not_mismatch',
+          message: 'Документ не в статусе расхождения сумм',
         });
-      } catch (err) {
-        req.log.warn({ err, draftS3Key, finalS3Key }, 'S3 copy/delete failed');
       }
+      const ackDetails = {
+        ...(typeof sd.parseErrorDetails === 'object' && sd.parseErrorDetails !== null
+          ? sd.parseErrorDetails
+          : {}),
+        acknowledgement: {
+          reason: req.body.reason ?? null,
+          userId: req.user?.id ?? null,
+          at: new Date().toISOString(),
+        },
+      };
+      const [updated] = await app.db
+        .update(sourceDocuments)
+        .set({
+          status: 'parsed',
+          parseErrorCode: null,
+          parseErrorDetails: ackDetails,
+          updatedAt: new Date(),
+        })
+        .where(eq(sourceDocuments.id, sd.id))
+        .returning();
+      if (!updated) throw new Error('Failed to update source_document');
 
-      // Возвращаем DTO (как в GET /:id)
       const items = await app.db
         .select()
         .from(sourceDocumentItems)
-        .where(eq(sourceDocumentItems.sourceDocumentId, created.id))
+        .where(eq(sourceDocumentItems.sourceDocumentId, updated.id))
         .orderBy(sourceDocumentItems.lineNo);
       const attachments = await app.db
         .select()
         .from(sourceDocumentAttachments)
-        .where(eq(sourceDocumentAttachments.sourceDocumentId, created.id));
-
-      const names = await loadSdNames(app, created);
-      reply.code(201);
+        .where(eq(sourceDocumentAttachments.sourceDocumentId, updated.id));
+      const names = await loadSdNames(app, updated);
       return {
-        ...sdRow(created, names),
-        items: items.map((i) => ({
-          id: i.id,
-          materialId: i.materialId,
-          nameRaw: i.nameRaw,
-          qty: i.qty,
-          unit: i.unit,
-          price: i.price,
-          sum: i.sum,
-          vatRate: i.vatRate,
-          vatSum: i.vatSum,
-          expectedDate: i.expectedDate?.toISOString().slice(0, 10) ?? null,
-          lineNo: i.lineNo,
-          volumeM3: i.volumeM3,
-          massKg: i.massKg,
-          volumeConfidence: i.volumeConfidence as 'low' | 'medium' | 'high' | null,
-          groupName: i.groupName,
+        ...sdRow(updated, names),
+        items: items.map(itemDto),
+        attachments: attachments.map(attachmentDto),
+      };
+    },
+  );
+
+  // ──────────── Журнал LLM-вызовов по документу (только админ) ────────────
+  app.get(
+    '/api/v1/source-documents/:id/llm-calls',
+    {
+      preHandler: [app.authenticate, app.authorize('admin')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: LlmCallListResponseSchema },
+      },
+    },
+    async (req) => {
+      const rows = await app.db
+        .select()
+        .from(llmCalls)
+        .where(eq(llmCalls.sourceDocumentId, req.params.id))
+        .orderBy(desc(llmCalls.createdAt));
+      return {
+        items: rows.map((r) => ({
+          id: r.id,
+          sourceDocumentId: r.sourceDocumentId,
+          providerId: r.providerId,
+          promptId: r.promptId,
+          docKind: r.docKind,
+          model: r.model,
+          requestMessages: r.requestMessages,
+          requestSchema: r.requestSchema ?? null,
+          responseRaw: r.responseRaw,
+          responseParsed: r.responseParsed ?? null,
+          promptTokens: r.promptTokens,
+          completionTokens: r.completionTokens,
+          latencyMs: r.latencyMs,
+          errorCode: r.errorCode,
+          errorMessage: r.errorMessage,
+          createdAt: r.createdAt.toISOString(),
         })),
-        attachments: attachments.map((a) => ({
-          id: a.id,
-          s3Key: a.s3Key,
-          filename: a.filename,
-          mimeType: a.mimeType,
-          sizeBytes: a.sizeBytes,
-          role: a.role,
+      };
+    },
+  );
+
+  // ──────────── PATCH редактирование полей УПД ────────────
+  // Поправляет шапку и/или позиции уже распознанного документа. После
+  // сохранения пересчитывается validation и, если расхождения исчезли —
+  // статус needs_resolution/validation_mismatch автоматически переходит
+  // в parsed.
+  const UpdPatchSchema = z.object({
+    docNumber: z.string().nullable().optional(),
+    docDate: z.string().nullable().optional(),
+    totalSum: z.union([z.number(), z.string()]).nullable().optional(),
+    supplier: z
+      .object({
+        inn: z.string().min(10).max(12),
+        kpp: z.string().min(9).max(9).nullable().optional(),
+        name: z.string().min(1),
+      })
+      .nullable()
+      .optional(),
+    items: z
+      .array(
+        z.object({
+          nameRaw: z.string().min(1),
+          qty: z.union([z.number(), z.string()]),
+          unit: z.string().default('шт'),
+          price: z.union([z.number(), z.string()]).nullable().optional(),
+          sum: z.union([z.number(), z.string()]).nullable().optional(),
+        }),
+      )
+      .optional(),
+  });
+
+  app.patch(
+    '/api/v1/source-documents/:id',
+    {
+      preHandler: [app.authenticate, app.authorize('admin', 'manager')],
+      schema: {
+        params: z.object({ id: z.string().uuid() }),
+        body: UpdPatchSchema,
+        response: { 200: SourceDocumentDetailSchema, 404: ErrorResponseSchema },
+      },
+    },
+    async (req, reply) => {
+      const [sd] = await app.db
+        .select()
+        .from(sourceDocuments)
+        .where(eq(sourceDocuments.id, req.params.id))
+        .limit(1);
+      if (!sd) return reply.code(404).send({ error: 'not_found' });
+
+      const upd: Partial<typeof sourceDocuments.$inferInsert> = { updatedAt: new Date() };
+      if (req.body.docNumber !== undefined) upd.docNumber = req.body.docNumber;
+      if (req.body.docDate !== undefined) {
+        upd.docDate = req.body.docDate ? new Date(req.body.docDate) : null;
+      }
+      if (req.body.totalSum !== undefined) {
+        upd.totalSum =
+          req.body.totalSum === null
+            ? null
+            : typeof req.body.totalSum === 'number'
+              ? req.body.totalSum.toString()
+              : req.body.totalSum;
+      }
+      if (req.body.supplier) {
+        const supplierId = await findOrCreateCounterparty(
+          app,
+          {
+            inn: req.body.supplier.inn,
+            kpp: req.body.supplier.kpp ?? null,
+            name: req.body.supplier.name,
+          },
+          'supplier',
+        );
+        upd.supplierId = supplierId;
+      }
+
+      if (req.body.items) {
+        // Полная замена позиций. Старые удаляются каскадом по delete + insert.
+        await app.db
+          .delete(sourceDocumentItems)
+          .where(eq(sourceDocumentItems.sourceDocumentId, sd.id));
+        if (req.body.items.length > 0) {
+          const rows = await Promise.all(
+            req.body.items.map(async (it, idx) => ({
+              sourceDocumentId: sd.id,
+              materialId: await findOrCreateMaterial(app, { name: it.nameRaw, unit: it.unit }),
+              nameRaw: it.nameRaw,
+              qty: typeof it.qty === 'number' ? it.qty.toString() : it.qty,
+              unit: it.unit,
+              price:
+                it.price === null || it.price === undefined
+                  ? null
+                  : typeof it.price === 'number'
+                    ? it.price.toString()
+                    : it.price,
+              sum:
+                it.sum === null || it.sum === undefined
+                  ? null
+                  : typeof it.sum === 'number'
+                    ? it.sum.toString()
+                    : it.sum,
+              lineNo: idx + 1,
+            })),
+          );
+          await app.db.insert(sourceDocumentItems).values(rows);
+        }
+      }
+
+      // Пересчёт validation. Берём актуальные значения шапки и позиций.
+      const updatedItems = await app.db
+        .select()
+        .from(sourceDocumentItems)
+        .where(eq(sourceDocumentItems.sourceDocumentId, sd.id))
+        .orderBy(sourceDocumentItems.lineNo);
+      const totalSumForCheck =
+        upd.totalSum !== undefined ? upd.totalSum : sd.totalSum;
+      const validation = validateUpdTotals({
+        totalSum: totalSumForCheck != null ? Number(totalSumForCheck) : null,
+        vatSum: sd.vatSum != null ? Number(sd.vatSum) : null,
+        items: updatedItems.map((i) => ({
+          qty: Number(i.qty),
+          price: i.price != null ? Number(i.price) : null,
+          sum: i.sum != null ? Number(i.sum) : null,
+          vatRate: i.vatRate != null ? Number(i.vatRate) : null,
+          vatSum: i.vatSum != null ? Number(i.vatSum) : null,
         })),
+      });
+      upd.validation = validation;
+
+      // Авто-перевод needs_resolution → parsed, если расхождения исчезли.
+      if (
+        sd.status === 'needs_resolution' &&
+        sd.parseErrorCode === 'validation_mismatch' &&
+        !validation.hasMismatch
+      ) {
+        upd.status = 'parsed';
+        upd.parseErrorCode = null;
+        upd.parseErrorDetails = null;
+      }
+
+      const [updated] = await app.db
+        .update(sourceDocuments)
+        .set(upd)
+        .where(eq(sourceDocuments.id, sd.id))
+        .returning();
+      if (!updated) throw new Error('Failed to update source_document');
+
+      const attachments = await app.db
+        .select()
+        .from(sourceDocumentAttachments)
+        .where(eq(sourceDocumentAttachments.sourceDocumentId, updated.id));
+      const names = await loadSdNames(app, updated);
+      return {
+        ...sdRow(updated, names),
+        items: updatedItems.map(itemDto),
+        attachments: attachments.map(attachmentDto),
       };
     },
   );
@@ -905,31 +1194,8 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       const names = await loadSdNames(app, updated);
       return {
         ...sdRow(updated, names),
-        items: items.map((i) => ({
-          id: i.id,
-          materialId: i.materialId,
-          nameRaw: i.nameRaw,
-          qty: i.qty,
-          unit: i.unit,
-          price: i.price,
-          sum: i.sum,
-          vatRate: i.vatRate,
-          vatSum: i.vatSum,
-          expectedDate: i.expectedDate?.toISOString().slice(0, 10) ?? null,
-          lineNo: i.lineNo,
-          volumeM3: i.volumeM3,
-          massKg: i.massKg,
-          volumeConfidence: i.volumeConfidence as 'low' | 'medium' | 'high' | null,
-          groupName: i.groupName,
-        })),
-        attachments: attachments.map((a) => ({
-          id: a.id,
-          s3Key: a.s3Key,
-          filename: a.filename,
-          mimeType: a.mimeType,
-          sizeBytes: a.sizeBytes,
-          role: a.role,
-        })),
+        items: items.map(itemDto),
+        attachments: attachments.map(attachmentDto),
       };
     },
   );

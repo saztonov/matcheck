@@ -9,6 +9,7 @@ import { loadEnv } from './lib/env.js';
 import { logger } from './lib/logger.js';
 import dbPlugin from './plugins/db.js';
 import redisPlugin from './plugins/redis.js';
+import queuePlugin from './plugins/queue.js';
 import securityPlugin from './plugins/security.js';
 import authPlugin from './plugins/auth.js';
 import { healthRoutes } from './routes/health.js';
@@ -49,6 +50,7 @@ export async function buildServer() {
 
   await app.register(redisPlugin);
   await app.register(dbPlugin);
+  await app.register(queuePlugin);
   await app.register(securityPlugin);
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024, files: 1 },

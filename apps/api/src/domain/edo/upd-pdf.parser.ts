@@ -1,10 +1,8 @@
 import { PDFParse } from 'pdf-parse';
 import { UpdPdfParsedSchema, type UpdPdfParsed } from '@matcheck/contracts';
 import { loadDefaultProvider } from '../llm/registry.js';
-import { loadActivePrompt } from '../prompts/registry.js';
-import { eq } from 'drizzle-orm';
-import { db } from '../../db/client.js';
-import { llmProviders } from '../../db/schema.js';
+import { loadActivePromptWithMeta } from '../prompts/registry.js';
+import { loggedComplete } from '../llm/logged-complete.js';
 
 const MIN_TEXT_LENGTH = 200;
 
@@ -15,6 +13,9 @@ export class PdfNoTextError extends Error {
   }
 }
 
+// JSON-схема ответа LLM. vatRate/vatSum в позициях убраны: бизнесу они в
+// позициях не нужны, а модель сосредотачивается на ключевых колонках
+// (qty/price/sum). На уровне шапки vatSum оставлен.
 const RESPONSE_JSON_SCHEMA = {
   type: 'object',
   required: ['items'],
@@ -26,7 +27,7 @@ const RESPONSE_JSON_SCHEMA = {
     itemsCount: {
       type: ['integer', 'null'],
       description:
-        'Значение из строки УПД «Всего наименований», «Количество позиций» и т.п. — целое число строк таблицы товаров. Используется для серверной сверки кол-ва распознанных строк. Если не нашли в документе — null.',
+        'Значение из строки УПД «Всего наименований», «Количество позиций» — целое число строк таблицы товаров.',
     },
     supplier: {
       type: ['object', 'null'],
@@ -51,19 +52,21 @@ const RESPONSE_JSON_SCHEMA = {
         required: ['nameRaw', 'qty', 'unit'],
         properties: {
           nameRaw: { type: 'string' },
-          qty: { type: 'number' },
-          unit: { type: 'string' },
-          price: { type: ['number', 'null'] },
-          sum: { type: ['number', 'null'] },
-          vatRate: { type: ['number', 'null'] },
-          vatSum: { type: ['number', 'null'] },
+          qty: {
+            type: 'number',
+            description:
+              'Количество (колонка 6 формы УПД). НЕ путать с кодом товара или кодом ОКЕИ (796/006/166 и т.п.).',
+          },
+          unit: { type: 'string', description: 'Единица измерения текстом' },
+          price: { type: ['number', 'null'], description: 'Цена за единицу' },
+          sum: { type: ['number', 'null'], description: 'Стоимость по строке (без НДС или с НДС)' },
           volumeM3: {
             type: ['number', 'null'],
-            description: 'Объём ОДНОЙ единицы с разумной упаковкой/паллетой в м³',
+            description: 'Объём ОДНОЙ единицы товара в м³. null только если совсем нет данных.',
           },
           massKg: {
             type: ['number', 'null'],
-            description: 'Масса ОДНОЙ единицы с упаковкой в кг',
+            description: 'Масса ОДНОЙ единицы в кг с упаковкой',
           },
           volumeConfidence: {
             type: ['string', 'null'],
@@ -72,7 +75,7 @@ const RESPONSE_JSON_SCHEMA = {
           },
           groupName: {
             type: ['string', 'null'],
-            description: 'Семантическая группа позиции (Воздуховоды/Отводы/Бетон/...)',
+            description: 'Семантическая группа позиции (Воздуховоды/Бетон/Кабель/...)',
           },
         },
       },
@@ -87,7 +90,13 @@ export type ParsePdfResult = {
   llmProviderId: string | null;
 };
 
-export async function parseUpdPdf(buffer: Buffer): Promise<ParsePdfResult> {
+// Извлечение текста из PDF + распознавание через LLM. Вызывается из воркера
+// asynchronous-очереди (см. apps/api/src/worker.ts) и должен быть устойчив
+// к долгим LLM-вызовам (5–10 минут на тяжёлых документах).
+export async function parseUpdPdf(
+  buffer: Buffer,
+  ctx: { sourceDocumentId: string | null } = { sourceDocumentId: null },
+): Promise<ParsePdfResult> {
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
   let text = '';
   try {
@@ -104,30 +113,30 @@ export async function parseUpdPdf(buffer: Buffer): Promise<ParsePdfResult> {
     throw new PdfNoTextError(cleanText.length);
   }
 
-  const [provider, systemPrompt] = await Promise.all([
+  const [provider, prompt] = await Promise.all([
     loadDefaultProvider(),
-    loadActivePrompt('upd'),
+    loadActivePromptWithMeta('upd'),
   ]);
-  const result = await provider.complete(
+  const result = await loggedComplete(
+    provider,
     {
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: prompt.content },
         { role: 'user', content: cleanText.slice(0, 100_000) },
       ],
       jsonSchema: RESPONSE_JSON_SCHEMA,
     },
     UpdPdfParsedSchema,
+    {
+      sourceDocumentId: ctx.sourceDocumentId,
+      docKind: 'upd',
+      promptId: prompt.id,
+    },
   );
-
-  const [defaultProvider] = await db
-    .select({ id: llmProviders.id })
-    .from(llmProviders)
-    .where(eq(llmProviders.isDefault, true))
-    .limit(1);
 
   return {
     parsed: result.data as UpdPdfParsed,
     textLength: cleanText.length,
-    llmProviderId: defaultProvider?.id ?? null,
+    llmProviderId: provider.id,
   };
 }

@@ -8,7 +8,12 @@ import type {
 
 export class GoogleAiStudioProvider implements LlmProvider {
   readonly kind = 'google_ai_studio' as const;
-  constructor(private readonly cfg: LlmProviderConfig) {}
+  readonly id: string;
+  readonly model: string;
+  constructor(private readonly cfg: LlmProviderConfig) {
+    this.id = cfg.id;
+    this.model = cfg.model;
+  }
 
   private url(path: string): string {
     const base = this.cfg.apiBaseUrl.replace(/\/$/, '');

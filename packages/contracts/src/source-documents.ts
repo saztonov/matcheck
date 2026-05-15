@@ -2,7 +2,26 @@ import { z } from 'zod';
 
 export const SourceKindSchema = z.enum(['upd', 'request']);
 export const SourceOriginSchema = z.enum(['edo_diadoc', 'manual_xml', 'manual_pdf', 'mail']);
-export const SourceStatusSchema = z.enum(['parsed', 'parse_failed', 'archived']);
+export const SourceStatusSchema = z.enum([
+  'parsed',
+  'parse_failed',
+  'archived',
+  'queued',
+  'processing',
+  'needs_resolution',
+]);
+export type SourceStatus = z.infer<typeof SourceStatusSchema>;
+
+// Машинно-читаемый код ошибки/состояния, по которому UI решает, какой
+// диалог показывать (skip/replace при дубле, alert при mismatch и т.д.).
+export const SourceParseErrorCodeSchema = z.enum([
+  'duplicate_upd',
+  'validation_mismatch',
+  'pdf_no_text',
+  'parse_failed',
+  'internal_error',
+]);
+export type SourceParseErrorCode = z.infer<typeof SourceParseErrorCodeSchema>;
 export const SourceDirectionSchema = z.enum(['inbound', 'outbound']);
 export type SourceDirection = z.infer<typeof SourceDirectionSchema>;
 
@@ -95,6 +114,13 @@ export const SourceDocumentSchema = z.object({
   llmProviderId: z.string().uuid().nullable(),
   llmConfidence: z.string().nullable(),
   parsedAt: z.string(),
+  queuedAt: z.string().nullable(),
+  processedAt: z.string().nullable(),
+  parseErrorCode: SourceParseErrorCodeSchema.nullable(),
+  parseErrorDetails: z.record(z.unknown()).nullable(),
+  originalFilename: z.string().nullable(),
+  contentHash: z.string().nullable(),
+  jobAttempts: z.number(),
   version: z.number(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -164,14 +190,15 @@ export const UpdPdfPartySchema = z.object({
   name: z.string().nullable().optional(),
 });
 
+// Позиция УПД, возвращённая LLM. Поля vatRate/vatSum намеренно убраны:
+// бизнесу они в позициях не нужны, а модель сосредотачивается на ключевых
+// колонках (qty/price/sum) и не путает их с долей НДС.
 export const UpdPdfItemSchema = z.object({
   nameRaw: z.string().min(1),
   qty: z.number(),
   unit: z.string().default('шт'),
   price: z.number().nullable().optional(),
   sum: z.number().nullable().optional(),
-  vatRate: z.number().nullable().optional(),
-  vatSum: z.number().nullable().optional(),
   volumeM3: z.number().nullable().optional(),
   massKg: z.number().nullable().optional(),
   volumeConfidence: VolumeConfidenceSchema.nullable().optional(),
@@ -194,32 +221,66 @@ export const UpdPdfParsedSchema = z.object({
 });
 export type UpdPdfParsed = z.infer<typeof UpdPdfParsedSchema>;
 
-export const UpdPdfParseResponseSchema = z.object({
-  draftS3Key: z.string(),
-  contentHash: z.string().regex(/^[0-9a-f]{64}$/),
-  parsed: UpdPdfParsedSchema,
-  llmProviderId: z.string().uuid().nullable(),
-  llmConfidence: z.number().min(0).max(1),
-  textLength: z.number(),
-  parseSource: z.enum(['llm', 'local']),
-});
-export type UpdPdfParseResponse = z.infer<typeof UpdPdfParseResponseSchema>;
-
-export const UpdPdfConfirmRequestSchema = z.object({
-  draftS3Key: z.string().min(1),
-  contentHash: z.string().regex(/^[0-9a-f]{64}$/),
-  parsed: UpdPdfParsedSchema,
-  direction: SourceDirectionSchema,
-  contractorId: z.string().uuid(),
-  siteId: z.string().uuid(),
-  // Подтверждение «Заменить» существующий УПД (см. UpdDuplicateConflictSchema).
-  replaceExistingId: z.string().uuid().optional(),
-});
-export type UpdPdfConfirmRequest = z.infer<typeof UpdPdfConfirmRequestSchema>;
-
 export const SourceDocumentFileResponseSchema = z.object({
   url: z.string().url(),
   filename: z.string(),
   mimeType: z.string().nullable(),
 });
 export type SourceDocumentFileResponse = z.infer<typeof SourceDocumentFileResponseSchema>;
+
+// ──────────── Асинхронная загрузка PDF УПД в очередь ────────────
+// Запрос — multipart/form-data, поэтому Zod-схема описывает только
+// нефайловые поля. Ответ — созданный документ в статусе 'queued'.
+
+export const UpdPdfQueueRequestSchema = z.object({
+  direction: SourceDirectionSchema,
+  contractorId: z.string().uuid(),
+  siteId: z.string().uuid(),
+});
+export type UpdPdfQueueRequest = z.infer<typeof UpdPdfQueueRequestSchema>;
+
+export const UpdPdfQueueResponseSchema = z.object({
+  created: SourceDocumentSchema,
+  // true, если файл с таким contentHash уже был загружен у этого подрядчика
+  // — возвращён существующий документ, новый джоб не поставлен.
+  alreadyExists: z.boolean(),
+});
+export type UpdPdfQueueResponse = z.infer<typeof UpdPdfQueueResponseSchema>;
+
+// ──────────── Разрешение статуса needs_resolution ────────────
+
+export const UpdResolveDuplicateRequestSchema = z.object({
+  action: z.enum(['skip', 'replace']),
+});
+export type UpdResolveDuplicateRequest = z.infer<typeof UpdResolveDuplicateRequestSchema>;
+
+export const UpdAcknowledgeMismatchRequestSchema = z.object({
+  reason: z.string().max(1000).optional(),
+});
+export type UpdAcknowledgeMismatchRequest = z.infer<typeof UpdAcknowledgeMismatchRequestSchema>;
+
+// ──────────── Журнал LLM-вызовов (для админского drawer) ────────────
+
+export const LlmCallSchema = z.object({
+  id: z.string().uuid(),
+  sourceDocumentId: z.string().uuid().nullable(),
+  providerId: z.string().uuid().nullable(),
+  promptId: z.string().uuid().nullable(),
+  docKind: z.string(),
+  model: z.string().nullable(),
+  requestMessages: z.unknown(),
+  requestSchema: z.unknown().nullable(),
+  responseRaw: z.string().nullable(),
+  responseParsed: z.unknown().nullable(),
+  promptTokens: z.number().nullable(),
+  completionTokens: z.number().nullable(),
+  latencyMs: z.number(),
+  errorCode: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type LlmCall = z.infer<typeof LlmCallSchema>;
+
+export const LlmCallListResponseSchema = z.object({
+  items: z.array(LlmCallSchema),
+});
