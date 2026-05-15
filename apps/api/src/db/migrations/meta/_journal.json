@@ -134,6 +134,13 @@
       "when": 1780358400000,
       "tag": "0018_confirmed_by_mol",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780444800000,
+      "tag": "0019_upd_prompt_v4",
+      "breakpoints": true
     }
   ]
 }

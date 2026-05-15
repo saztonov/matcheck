@@ -193,17 +193,41 @@ export const UpdPdfPartySchema = z.object({
 // Позиция УПД, возвращённая LLM. Поля vatRate/vatSum намеренно убраны:
 // бизнесу они в позициях не нужны, а модель сосредотачивается на ключевых
 // колонках (qty/price/sum) и не путает их с долей НДС.
-export const UpdPdfItemSchema = z.object({
-  nameRaw: z.string().min(1),
-  qty: z.number(),
-  unit: z.string().default('шт'),
-  price: z.number().nullable().optional(),
-  sum: z.number().nullable().optional(),
-  volumeM3: z.number().nullable().optional(),
-  massKg: z.number().nullable().optional(),
-  volumeConfidence: VolumeConfidenceSchema.nullable().optional(),
-  groupName: z.string().nullable().optional(),
-});
+//
+// z.preprocess мэппит snake_case → camelCase: если LLM (несмотря на
+// промпт v4 и JSON Schema в camelCase) вернёт volume_m3/mass_kg/
+// volume_confidence/group_name/name_raw — значения подхватятся в
+// соответствующие camelCase-поля. Иначе Zod с .optional() молча
+// отбрасывал бы snake_case ключи, и в БД попадал NULL.
+const SNAKE_TO_CAMEL_ITEM: Record<string, string> = {
+  volume_m3: 'volumeM3',
+  mass_kg: 'massKg',
+  volume_confidence: 'volumeConfidence',
+  group_name: 'groupName',
+  name_raw: 'nameRaw',
+};
+export const UpdPdfItemSchema = z.preprocess(
+  (raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const r = raw as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...r };
+    for (const [snake, camel] of Object.entries(SNAKE_TO_CAMEL_ITEM)) {
+      if (out[camel] == null && out[snake] != null) out[camel] = out[snake];
+    }
+    return out;
+  },
+  z.object({
+    nameRaw: z.string().min(1),
+    qty: z.number(),
+    unit: z.string().default('шт'),
+    price: z.number().nullable().optional(),
+    sum: z.number().nullable().optional(),
+    volumeM3: z.number().nullable().optional(),
+    massKg: z.number().nullable().optional(),
+    volumeConfidence: VolumeConfidenceSchema.nullable().optional(),
+    groupName: z.string().nullable().optional(),
+  }),
+);
 export type UpdPdfItem = z.infer<typeof UpdPdfItemSchema>;
 
 export const UpdPdfParsedSchema = z.object({
