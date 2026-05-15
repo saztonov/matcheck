@@ -128,11 +128,18 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         filters.push(eq(shipments.statusId, statusId));
       }
       if (kind) filters.push(eq(shipments.kind, kind));
-      if (siteId) filters.push(eq(shipments.siteId, siteId));
+      // inspector_kpp видит отгрузки своего объекта-источника (включая чужие).
+      // Без назначенного объекта — пустой результат. Для admin/manager
+      // siteId из query — обычный опциональный фильтр.
       if (req.user?.role === 'inspector_kpp') {
-        filters.push(eq(shipments.inspectorId, req.user.id));
-      } else if (inspectorId) {
-        filters.push(eq(shipments.inspectorId, inspectorId));
+        if (!req.user.siteId) {
+          filters.push(drSql`false`);
+        } else {
+          filters.push(eq(shipments.siteId, req.user.siteId));
+        }
+      } else {
+        if (siteId) filters.push(eq(shipments.siteId, siteId));
+        if (inspectorId) filters.push(eq(shipments.inspectorId, inspectorId));
       }
       if (!status && req.user?.role !== 'inspector_kpp' && req.user) {
         const draftId = await resolveStatusId(app, 'draft');
@@ -174,7 +181,11 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const dto = await buildShipmentDto(app, req.params.id);
       if (!dto) return reply.code(404).send({ error: 'not_found' });
-      if (req.user?.role === 'inspector_kpp' && dto.inspectorId !== req.user.id) {
+      // inspector_kpp видит только отгрузки своего объекта-источника.
+      if (
+        req.user?.role === 'inspector_kpp' &&
+        (!req.user.siteId || dto.siteId !== req.user.siteId)
+      ) {
         return reply.code(404).send({ error: 'not_found' });
       }
       return dto;
@@ -198,6 +209,19 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const input = req.body;
       const inspectorId = req.user?.role === 'inspector_kpp' ? req.user.id : (req.user?.id ?? null);
+
+      // inspector_kpp всегда работает в рамках своего объекта-источника;
+      // вход из body игнорируется и заменяется значением из БД.
+      if (req.user?.role === 'inspector_kpp') {
+        if (!req.user.siteId) {
+          return reply.code(400).send({
+            error: 'no_site_assigned',
+            message: 'Объект не назначен — обратитесь к администратору',
+          });
+        }
+        input.siteId = req.user.siteId;
+      }
+
       const statusId = await resolveStatusId(app, input.statusCode);
 
       // Дополнительная валидация согласованности kind ↔ receiver/destSite,
@@ -254,12 +278,14 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         .limit(1);
       if (!existing) return reply.code(404).send({ error: 'not_found' });
 
+      // inspector_kpp может удалять отгрузки своего объекта (включая чужие);
+      // admin/manager — любые.
       const role = req.user?.role;
-      const isOwner = existing.inspectorId === req.user?.id;
-      if (role === 'inspector_kpp' && !isOwner) {
-        return reply.code(403).send({ error: 'forbidden' });
-      }
-      if (role !== 'admin' && role !== 'manager' && role !== 'inspector_kpp') {
+      if (role === 'inspector_kpp') {
+        if (!req.user?.siteId || existing.siteId !== req.user.siteId) {
+          return reply.code(403).send({ error: 'forbidden' });
+        }
+      } else if (role !== 'admin' && role !== 'manager') {
         return reply.code(403).send({ error: 'forbidden' });
       }
 

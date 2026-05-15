@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -35,6 +36,7 @@ import type {
   Status,
 } from '@matcheck/contracts';
 import { api } from '../../services/api';
+import { useAuthStore } from '../../stores/auth';
 import { capturePhoto } from '../../services/photoPipeline';
 import {
   applyLocalEdit,
@@ -82,9 +84,16 @@ export default function ShipmentPage() {
   const shipmentId = params.get('shipment');
   const fromList = params.get('from') === 'list';
 
+  // Для inspector_kpp объект-источник фиксирован значением из БД (selectбыл бы
+  // disabled, а сервер всё равно перепишет siteId на user.siteId).
+  const authUser = useAuthStore((s) => s.user);
+  const isInspector = authUser?.role === 'inspector_kpp';
+  const inspectorSiteId = isInspector ? (authUser?.siteId ?? null) : null;
+  const inspectorWithoutSite = isInspector && !inspectorSiteId;
+
   const [items, setItems] = useState<DraftItem[]>([]);
   const [kind, setKind] = useState<ShipmentKind>('contractor');
-  const [siteId, setSiteId] = useState<string | null>(null);
+  const [siteId, setSiteId] = useState<string | null>(inspectorSiteId);
   const [destSiteId, setDestSiteId] = useState<string | null>(null);
   const [receiverId, setReceiverId] = useState<string | null>(null);
   const [plate, setPlate] = useState('');
@@ -97,7 +106,7 @@ export default function ShipmentPage() {
     if (!shipmentId) {
       setItems([]);
       setKind('contractor');
-      setSiteId(null);
+      setSiteId(inspectorSiteId);
       setDestSiteId(null);
       setReceiverId(null);
       setPlate('');
@@ -105,7 +114,7 @@ export default function ShipmentPage() {
       setComment('');
       setLoadedShipment(null);
     }
-  }, [shipmentId]);
+  }, [shipmentId, inspectorSiteId]);
 
   const sitesQuery = useQuery({
     queryKey: ['sites', 'all'],
@@ -160,7 +169,11 @@ export default function ShipmentPage() {
     if (!s) return;
     setLoadedShipment(s);
     setKind(s.kind);
-    setSiteId((prev) => prev ?? (s.siteId === SYSTEM_SITE_ID ? null : s.siteId));
+    if (isInspector) {
+      setSiteId(inspectorSiteId);
+    } else {
+      setSiteId((prev) => prev ?? (s.siteId === SYSTEM_SITE_ID ? null : s.siteId));
+    }
     setDestSiteId((prev) => prev ?? s.destSiteId ?? null);
     setReceiverId((prev) => prev ?? s.receiverCounterpartyId ?? null);
     setPlate(s.vehiclePlate ?? '');
@@ -180,12 +193,16 @@ export default function ShipmentPage() {
 
   const createBlank = async () => {
     if (creating) return;
+    if (inspectorWithoutSite) {
+      message.error('Объект не назначен — обратитесь к администратору');
+      return;
+    }
     setCreating(true);
     try {
       const id = crypto.randomUUID();
       await applyLocalEdit(id, {
         kind: 'contractor',
-        siteId: SYSTEM_SITE_ID,
+        siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
       });
       await enqueueMutation({
         id: crypto.randomUUID(),
@@ -499,6 +516,7 @@ export default function ShipmentPage() {
                 showSearch
                 optionFilterProp="label"
                 loading={sitesQuery.isLoading}
+                disabled={isInspector}
                 options={sites.map((s) => ({ value: s.id, label: `${s.code} · ${s.name}` }))}
               />
             </Card>
@@ -726,10 +744,24 @@ export default function ShipmentPage() {
         <Typography.Title level={3} style={{ margin: 0 }}>
           Отгрузка
         </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} loading={creating} onClick={createBlank}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          loading={creating}
+          onClick={createBlank}
+          disabled={inspectorWithoutSite}
+        >
           Новая отгрузка
         </Button>
       </Space>
+      {inspectorWithoutSite && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Объект не назначен"
+          description="Чтобы видеть отгрузки и создавать новые, обратитесь к администратору — он должен назначить вам объект на странице «Администрирование → Пользователи»."
+        />
+      )}
       <ShipmentsHistory
         onOpen={(id) => {
           setParams({});

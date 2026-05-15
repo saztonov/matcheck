@@ -8,6 +8,10 @@ import { ACCESS_COOKIE_NAME } from '../domain/auth/refresh.js';
 export type AuthUser = {
   id: string;
   role: 'admin' | 'manager' | 'inspector_kpp';
+  // Привязка к объекту. У inspector_kpp определяет область видимости;
+  // читаем из БД на каждом запросе, чтобы смена объекта применялась
+  // моментально без перевыпуска токена.
+  siteId: string | null;
   sessionId: string;
 };
 
@@ -83,6 +87,7 @@ export default fp(async (app) => {
           id: users.id,
           role: users.role,
           isActive: users.isActive,
+          siteId: users.siteId,
           sessionsInvalidatedAt: users.sessionsInvalidatedAt,
           passwordChangedAt: users.passwordChangedAt,
         })
@@ -96,7 +101,7 @@ export default fp(async (app) => {
       ) {
         return null;
       }
-      return { id: user.id, role: user.role, sessionId: claims.sid };
+      return { id: user.id, role: user.role, siteId: user.siteId, sessionId: claims.sid };
     } catch {
       return null;
     }

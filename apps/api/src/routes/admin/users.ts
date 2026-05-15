@@ -2,7 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { asZod } from '../../lib/fastify.js';
-import { UserDtoSchema, UserRoleSchema, ErrorResponseSchema } from '@matcheck/contracts';
+import {
+  UserDtoSchema,
+  UserAdminPatchSchema,
+  ErrorResponseSchema,
+} from '@matcheck/contracts';
 import { users } from '../../db/schema.js';
 
 function dto(u: typeof users.$inferSelect) {
@@ -11,6 +15,7 @@ function dto(u: typeof users.$inferSelect) {
     email: u.email,
     role: u.role,
     isActive: u.isActive,
+    siteId: u.siteId,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -35,17 +40,33 @@ export async function userAdminRoutes(rawApp: FastifyInstance): Promise<void> {
       preHandler: [app.authenticate, app.authorize('admin')],
       schema: {
         params: z.object({ id: z.string().uuid() }),
-        body: z.object({
-          role: UserRoleSchema.optional(),
-          isActive: z.boolean().optional(),
-        }),
+        body: UserAdminPatchSchema,
         response: { 200: UserDtoSchema, 404: ErrorResponseSchema },
       },
     },
     async (req, reply) => {
+      const [existing] = await app.db
+        .select()
+        .from(users)
+        .where(eq(users.id, req.params.id))
+        .limit(1);
+      if (!existing) return reply.code(404).send({ error: 'not_found' });
+
       const patch: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
+      const nextRole = req.body.role ?? existing.role;
       if (req.body.role !== undefined) patch.role = req.body.role;
       if (req.body.isActive !== undefined) patch.isActive = req.body.isActive;
+
+      // Нормализация siteId по итоговой роли: только inspector_kpp может иметь объект.
+      // При смене роли на admin/manager — обнуляем, даже если в body пришёл UUID.
+      // Для inspector_kpp пишем то, что пришло (включая null — это допустимое
+      // промежуточное состояние «инспектор без объекта»).
+      if (nextRole !== 'inspector_kpp') {
+        patch.siteId = null;
+      } else if (req.body.siteId !== undefined) {
+        patch.siteId = req.body.siteId;
+      }
+
       const [updated] = await app.db
         .update(users)
         .set(patch)

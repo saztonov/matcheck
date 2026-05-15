@@ -71,6 +71,10 @@ export const users = pgTable(
     passwordHash: text('password_hash').notNull(),
     role: userRoleEnum('role').notNull().default('manager'),
     isActive: boolean('is_active').notNull().default(false),
+    // Объект, к которому привязан пользователь. Обязателен для inspector_kpp
+    // (определяет область видимости приёмок/отгрузок/документов).
+    // Для admin/manager всегда null.
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -80,7 +84,10 @@ export const users = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('users_email_unique').on(sql`lower(${t.email})`)],
+  (t) => [
+    uniqueIndex('users_email_unique').on(sql`lower(${t.email})`),
+    index('users_site_idx').on(t.siteId).where(sql`${t.siteId} is not null`),
+  ],
 );
 
 export const sessions = pgTable('sessions', {

@@ -99,6 +99,13 @@
       "when": 1780012800000,
       "tag": "0013_upd_site_id",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780099200000,
+      "tag": "0014_user_site",
+      "breakpoints": true
     }
   ]
 }

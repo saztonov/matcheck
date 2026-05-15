@@ -1,6 +1,6 @@
 import { Select, Switch, Tag, Typography, Space, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { UserDto, UserRole } from '@matcheck/contracts';
+import type { Site, UserAdminPatch, UserDto, UserRole } from '@matcheck/contracts';
 import { api } from '../../services/api';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
 
@@ -12,8 +12,13 @@ export default function AdminUsersPage() {
     queryKey: ['admin', 'users'],
     queryFn: () => api.get<UserDto[]>('/admin/users'),
   });
+  const sitesQuery = useQuery({
+    queryKey: ['sites', 'active'],
+    queryFn: () => api.get<{ items: Site[]; total: number }>('/sites?activeOnly=true&limit=500'),
+  });
+  const sites = sitesQuery.data?.items ?? [];
   const patch = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { role?: UserRole; isActive?: boolean } }) =>
+    mutationFn: ({ id, body }: { id: string; body: UserAdminPatch }) =>
       api.patch(`/admin/users/${id}`, body),
     onSuccess: () => {
       message.success('Сохранено');
@@ -21,6 +26,24 @@ export default function AdminUsersPage() {
     },
     onError: (err: Error) => message.error(err.message),
   });
+
+  const renderSiteCell = (row: UserDto) => {
+    if (row.role !== 'inspector_kpp') {
+      return <Typography.Text type="secondary">—</Typography.Text>;
+    }
+    return (
+      <Select<string>
+        value={row.siteId ?? undefined}
+        style={{ width: 220 }}
+        placeholder="Не назначен"
+        showSearch
+        optionFilterProp="label"
+        loading={sitesQuery.isLoading}
+        onChange={(v) => patch.mutate({ id: row.id, body: { siteId: v ?? null } })}
+        options={sites.map((s) => ({ value: s.id, label: `${s.code} · ${s.name}` }))}
+      />
+    );
+  };
 
   return (
     <div>
@@ -44,6 +67,11 @@ export default function AdminUsersPage() {
             ),
           },
           {
+            title: 'Объект',
+            dataIndex: 'siteId',
+            render: (_: unknown, row: UserDto) => renderSiteCell(row),
+          },
+          {
             title: 'Активен',
             dataIndex: 'isActive',
             render: (a: boolean, row: UserDto) => (
@@ -55,15 +83,28 @@ export default function AdminUsersPage() {
           },
           { title: 'Создан', dataIndex: 'createdAt' },
         ]}
-        cardRender={(u) => (
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <Typography.Text strong>{u.email}</Typography.Text>
-            <Space>
-              <Tag>{u.role}</Tag>
-              {u.isActive ? <Tag color="green">активен</Tag> : <Tag color="red">не активен</Tag>}
+        cardRender={(u) => {
+          const site = u.siteId ? sites.find((s) => s.id === u.siteId) : null;
+          return (
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Typography.Text strong>{u.email}</Typography.Text>
+              <Space wrap>
+                <Tag>{u.role}</Tag>
+                {u.isActive ? <Tag color="green">активен</Tag> : <Tag color="red">не активен</Tag>}
+              </Space>
+              {u.role === 'inspector_kpp' && (
+                <Space>
+                  <Typography.Text type="secondary">Объект:</Typography.Text>
+                  {site ? (
+                    <Typography.Text>{`${site.code} · ${site.name}`}</Typography.Text>
+                  ) : (
+                    <Tag color="orange">не назначен</Tag>
+                  )}
+                </Space>
+              )}
             </Space>
-          </Space>
-        )}
+          );
+        }}
       />
     </div>
   );

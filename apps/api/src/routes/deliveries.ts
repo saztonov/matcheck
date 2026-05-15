@@ -122,9 +122,14 @@ export async function deliveryRoutes(rawApp: FastifyInstance): Promise<void> {
         const statusId = await resolveStatusId(app, status);
         filters.push(eq(deliveries.statusId, statusId));
       }
-      // inspector_kpp видит только свои приёмки
+      // inspector_kpp видит приёмки своего объекта (включая созданные другими).
+      // Без назначенного объекта — пустой результат.
       if (req.user?.role === 'inspector_kpp') {
-        filters.push(eq(deliveries.inspectorId, req.user.id));
+        if (!req.user.siteId) {
+          filters.push(drSql`false`);
+        } else {
+          filters.push(eq(deliveries.siteId, req.user.siteId));
+        }
       } else if (inspectorId) {
         filters.push(eq(deliveries.inspectorId, inspectorId));
       }
@@ -169,7 +174,11 @@ export async function deliveryRoutes(rawApp: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const dto = await buildDeliveryDto(app, req.params.id);
       if (!dto) return reply.code(404).send({ error: 'not_found' });
-      if (req.user?.role === 'inspector_kpp' && dto.inspectorId !== req.user.id) {
+      // inspector_kpp видит только приёмки своего объекта.
+      if (
+        req.user?.role === 'inspector_kpp' &&
+        (!req.user.siteId || dto.siteId !== req.user.siteId)
+      ) {
         return reply.code(404).send({ error: 'not_found' });
       }
       return dto;
@@ -193,6 +202,19 @@ export async function deliveryRoutes(rawApp: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const input = req.body;
       const inspectorId = req.user?.role === 'inspector_kpp' ? req.user.id : (req.user?.id ?? null);
+
+      // inspector_kpp всегда создаёт/редактирует приёмки своего объекта,
+      // независимо от того, что прислал клиент.
+      if (req.user?.role === 'inspector_kpp') {
+        if (!req.user.siteId) {
+          return reply.code(400).send({
+            error: 'no_site_assigned',
+            message: 'Объект не назначен — обратитесь к администратору',
+          });
+        }
+        input.siteId = req.user.siteId;
+      }
+
       const statusId = await resolveStatusId(app, input.statusCode);
 
       // OCC update
@@ -244,14 +266,14 @@ export async function deliveryRoutes(rawApp: FastifyInstance): Promise<void> {
         .limit(1);
       if (!existing) return reply.code(404).send({ error: 'not_found' });
 
-      // inspector_kpp может удалять только свои приёмки.
+      // inspector_kpp может удалять приёмки своего объекта (включая чужие);
       // admin/manager — любые.
       const role = req.user?.role;
-      const isOwner = existing.inspectorId === req.user?.id;
-      if (role === 'inspector_kpp' && !isOwner) {
-        return reply.code(403).send({ error: 'forbidden' });
-      }
-      if (role !== 'admin' && role !== 'manager' && role !== 'inspector_kpp') {
+      if (role === 'inspector_kpp') {
+        if (!req.user?.siteId || existing.siteId !== req.user.siteId) {
+          return reply.code(403).send({ error: 'forbidden' });
+        }
+      } else if (role !== 'admin' && role !== 'manager') {
         return reply.code(403).send({ error: 'forbidden' });
       }
 

@@ -24,9 +24,19 @@ export const UserDtoSchema = z.object({
   email: z.string(),
   role: UserRoleSchema,
   isActive: z.boolean(),
+  // Объект, привязанный к пользователю. Обязателен для inspector_kpp;
+  // для admin/manager всегда null.
+  siteId: z.string().uuid().nullable(),
   createdAt: z.string(),
 });
 export type UserDto = z.infer<typeof UserDtoSchema>;
+
+export const UserAdminPatchSchema = z.object({
+  role: UserRoleSchema.optional(),
+  isActive: z.boolean().optional(),
+  siteId: z.string().uuid().nullable().optional(),
+});
+export type UserAdminPatch = z.infer<typeof UserAdminPatchSchema>;
 
 export const LoginResponseSchema = z.object({
   accessToken: z.string(),

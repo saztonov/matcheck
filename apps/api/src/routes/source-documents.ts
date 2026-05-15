@@ -244,6 +244,15 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       if (kind) conditions.push(eq(sourceDocuments.kind, kind));
       if (direction) conditions.push(eq(sourceDocuments.direction, direction));
       if (q) conditions.push(ilike(sourceDocuments.docNumber, `%${q}%`));
+      // inspector_kpp видит только документы своего объекта.
+      // Без объекта — пустой результат.
+      if (req.user?.role === 'inspector_kpp') {
+        if (!req.user.siteId) {
+          conditions.push(drSql`false`);
+        } else {
+          conditions.push(eq(sourceDocuments.siteId, req.user.siteId));
+        }
+      }
       // Фильтр «непринятые» имеет смысл только для входящих документов:
       // он смотрит привязки к deliveries. Для outbound — игнорируем.
       if (unaccepted && direction !== 'outbound') {
@@ -287,6 +296,13 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
         .where(eq(sourceDocuments.id, req.params.id))
         .limit(1);
       if (!sd) return reply.code(404).send({ error: 'not_found' });
+      // inspector_kpp видит только документы своего объекта.
+      if (
+        req.user?.role === 'inspector_kpp' &&
+        (!req.user.siteId || sd.siteId !== req.user.siteId)
+      ) {
+        return reply.code(404).send({ error: 'not_found' });
+      }
       const items = await app.db
         .select()
         .from(sourceDocumentItems)
@@ -337,6 +353,17 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       },
     },
     async (req, reply) => {
+      // inspector_kpp видит файлы только документов своего объекта.
+      if (req.user?.role === 'inspector_kpp') {
+        const [sd] = await app.db
+          .select({ siteId: sourceDocuments.siteId })
+          .from(sourceDocuments)
+          .where(eq(sourceDocuments.id, req.params.id))
+          .limit(1);
+        if (!sd || !req.user.siteId || sd.siteId !== req.user.siteId) {
+          return reply.code(404).send({ error: 'not_found' });
+        }
+      }
       const att = await findOriginalAttachment(app, req.params.id);
       if (!att) return reply.code(404).send({ error: 'no_attachment' });
       try {
@@ -358,6 +385,17 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req, reply) => {
+      // inspector_kpp видит файлы только документов своего объекта.
+      if (req.user?.role === 'inspector_kpp') {
+        const [sd] = await app.db
+          .select({ siteId: sourceDocuments.siteId })
+          .from(sourceDocuments)
+          .where(eq(sourceDocuments.id, req.params.id))
+          .limit(1);
+        if (!sd || !req.user.siteId || sd.siteId !== req.user.siteId) {
+          return reply.code(404).send({ error: 'not_found' });
+        }
+      }
       const att = await findOriginalAttachment(app, req.params.id);
       if (!att) return reply.code(404).send({ error: 'no_attachment' });
 

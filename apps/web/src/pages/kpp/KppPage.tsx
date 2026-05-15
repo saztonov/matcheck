@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -35,6 +36,7 @@ import type {
   Status,
 } from '@matcheck/contracts';
 import { api } from '../../services/api';
+import { useAuthStore } from '../../stores/auth';
 import { SYSTEM_SITE_ID } from '../../lib/db';
 import { capturePhoto } from '../../services/photoPipeline';
 import {
@@ -87,27 +89,35 @@ export default function KppPage() {
   const fromAccepted = params.get('from') === 'accepted';
   const tab: ListTab = params.get('tab') === 'accepted' ? 'accepted' : 'expected';
 
+  // Для inspector_kpp объект фиксирован значением из БД; селект блокируется,
+  // а сервер всё равно перепишет siteId в запросе на сохранение.
+  const authUser = useAuthStore((s) => s.user);
+  const isInspector = authUser?.role === 'inspector_kpp';
+  const inspectorSiteId = isInspector ? (authUser?.siteId ?? null) : null;
+  const inspectorWithoutSite = isInspector && !inspectorSiteId;
+
   const [items, setItems] = useState<DraftItem[]>([]);
   const [plate, setPlate] = useState('');
   const [comment, setComment] = useState('');
-  const [siteId, setSiteId] = useState<string | null>(null);
+  const [siteId, setSiteId] = useState<string | null>(inspectorSiteId);
   const [contractorId, setContractorId] = useState<string | null>(null);
   const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
   const [loadedDelivery, setLoadedDelivery] = useState<Delivery | null>(null);
   const [creating, setCreating] = useState(false);
 
-  // Сбрасываем локальное состояние при выходе из формы
+  // Сбрасываем локальное состояние при выходе из формы. Для inspector_kpp
+  // siteId восстанавливается из назначенного объекта (не очищается).
   useEffect(() => {
     if (!deliveryId) {
       setItems([]);
       setPlate('');
       setComment('');
-      setSiteId(null);
+      setSiteId(inspectorSiteId);
       setContractorId(null);
       setSelectedUpd(null);
       setLoadedDelivery(null);
     }
-  }, [deliveryId]);
+  }, [deliveryId, inspectorSiteId]);
 
   const sitesQuery = useQuery({
     queryKey: ['sites', 'all'],
@@ -166,8 +176,13 @@ export default function KppPage() {
     setPlate(d.vehiclePlate ?? '');
     setComment(d.comment ?? '');
     // siteId/contractorId подхватываются один раз — последующее редактирование
-    // ведётся через локальный state.
-    setSiteId((prev) => prev ?? (d.siteId === SYSTEM_SITE_ID ? null : d.siteId));
+    // ведётся через локальный state. Для inspector_kpp siteId всегда фиксирован
+    // на назначенном объекте.
+    if (isInspector) {
+      setSiteId(inspectorSiteId);
+    } else {
+      setSiteId((prev) => prev ?? (d.siteId === SYSTEM_SITE_ID ? null : d.siteId));
+    }
     setContractorId((prev) => prev ?? d.contractorId ?? null);
     setItems(
       d.items.map((it, idx) => ({
@@ -198,13 +213,19 @@ export default function KppPage() {
    */
   const createBlank = async () => {
     if (creating) return;
+    if (inspectorWithoutSite) {
+      message.error('Объект не назначен — обратитесь к администратору');
+      return;
+    }
     setCreating(true);
     try {
       const id = crypto.randomUUID();
-      // siteId — обязателен на сервере. До выбора реального объекта используем
+      // siteId — обязателен на сервере. Для inspector_kpp сразу подставляем
+      // назначенный объект (сервер всё равно перезапишет). Для остальных —
       // системный «Без объекта» как заглушку, чтобы черновик мог уехать
       // на сервер (status='not_filled') и не зависал в pending-mutations.
-      await applyLocalEdit(id, { siteId: SYSTEM_SITE_ID });
+      const initialSiteId = inspectorSiteId ?? SYSTEM_SITE_ID;
+      await applyLocalEdit(id, { siteId: initialSiteId });
       await enqueueMutation({
         id: crypto.randomUUID(),
         kind: 'delivery_upsert',
@@ -227,6 +248,10 @@ export default function KppPage() {
    */
   const createFromUpd = async (upd: SourceDocument) => {
     if (creating) return;
+    if (inspectorWithoutSite) {
+      message.error('Объект не назначен — обратитесь к администратору');
+      return;
+    }
     setCreating(true);
     try {
       const dbi = await db();
@@ -241,7 +266,7 @@ export default function KppPage() {
       }
       const id = crypto.randomUUID();
       const patch: Partial<Delivery> = {
-        siteId: SYSTEM_SITE_ID,
+        siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
         supplierId: detail.supplierId ?? null,
         sourceDocumentIds: [upd.id],
         items: detail.items.map((it, i) => ({
@@ -539,6 +564,7 @@ export default function KppPage() {
                 showSearch
                 optionFilterProp="label"
                 loading={sitesQuery.isLoading}
+                disabled={isInspector}
                 options={sites.map((s) => ({
                   value: s.id,
                   label: `${s.code} · ${s.name}`,
@@ -786,11 +812,26 @@ export default function KppPage() {
               { label: 'Принятые', value: 'accepted' },
             ]}
           />
-          <Button type="primary" icon={<PlusOutlined />} loading={creating} onClick={createBlank}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            loading={creating}
+            onClick={createBlank}
+            disabled={inspectorWithoutSite}
+          >
             Новая приёмка
           </Button>
         </Space>
       </Space>
+
+      {inspectorWithoutSite && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Объект не назначен"
+          description="Чтобы видеть приёмки и создавать новые, обратитесь к администратору — он должен назначить вам объект на странице «Администрирование → Пользователи»."
+        />
+      )}
 
       {tab === 'expected' ? (
         <ExpectedUpds onOpen={createFromUpd} />
