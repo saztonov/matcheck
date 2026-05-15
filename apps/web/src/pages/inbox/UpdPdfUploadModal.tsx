@@ -157,7 +157,7 @@ export function UpdPdfUploadModal({
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="Распознавание идёт в фоне — модалка закроется сразу после загрузки."
+        message="Распознавание идёт в фоне — окно закроется сразу после загрузки."
         description="Документы появятся в списке со статусом «в очереди» и обновятся автоматически по мере обработки."
       />
       <Form layout="vertical">
