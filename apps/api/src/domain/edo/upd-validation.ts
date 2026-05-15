@@ -38,9 +38,21 @@ export function validateUpdTotals(parsed: UpdLikeForValidation): UpdValidation {
   const totalsTolerance = Math.max(ROW_TOLERANCE, rowCount * ROW_TOLERANCE);
 
   // 1) Σ items.sum vs totalSum.
+  //
+  // ВАЖНО про базу сравнения. В стандартной форме УПД (ПР № 1137):
+  //   - «Всего к оплате (9)» = сумма С НДС → попадает в parsed.totalSum.
+  //   - Колонка «Стоимость без налога – всего» по строкам → item.sum.
+  //   - parsed.vatSum — общий НДС из шапки.
+  // То есть items.sum это база БЕЗ НДС, а totalSum — С НДС. Сравнивать
+  // их напрямую нельзя — на любом УПД с НДС > 0 будет false-positive
+  // (см. УПД 201/21125720: 162660.80 vs 133328.52 = разница ровно vatSum).
+  // Если шапочный vatSum известен — приводим totalSum к базе «без НДС».
+  // Если vatSum null/0 (документ без НДС или XML-парсер не извлёк) —
+  // сравниваем напрямую.
   {
-    const expected = parsed.totalSum ?? null;
-    if (expected == null) {
+    const totalSum = parsed.totalSum ?? null;
+    const vatSum = parsed.vatSum ?? null;
+    if (totalSum == null) {
       checks.push({
         name: 'sum_total',
         scope: 'document',
@@ -52,12 +64,13 @@ export function validateUpdTotals(parsed: UpdLikeForValidation): UpdValidation {
         skipReason: 'no_expected',
       });
     } else {
+      const expected = round2(vatSum != null && vatSum > 0 ? totalSum - vatSum : totalSum);
       const actual = sumNullable(items.map((i) => i.sum ?? null));
       const diff = round2(Math.abs(expected - actual));
       checks.push({
         name: 'sum_total',
         scope: 'document',
-        expected: round2(expected),
+        expected,
         actual,
         diff,
         tolerance: totalsTolerance,
@@ -67,8 +80,16 @@ export function validateUpdTotals(parsed: UpdLikeForValidation): UpdValidation {
   }
 
   // 2) Σ items.vatSum vs vatSum (документа).
+  //
+  // PDF-флоу больше не извлекает vatSum по позициям (см. UpdPdfItemSchema:
+  // поля убраны намеренно, чтобы LLM сосредоточилась на qty/price/sum).
+  // В этом случае все items.vatSum пусты, sumNullable даёт 0, и сравнение
+  // с шапочным vatSum > 0 всегда давало false-positive. Скипаем check,
+  // когда нечего сравнивать. Для XML-флоу items.vatSum по-прежнему
+  // заполняется парсером, и check работает как раньше.
   {
     const expected = parsed.vatSum ?? null;
+    const hasAnyItemVat = items.some((i) => i.vatSum != null);
     if (expected == null) {
       checks.push({
         name: 'vat_total',
@@ -79,6 +100,17 @@ export function validateUpdTotals(parsed: UpdLikeForValidation): UpdValidation {
         tolerance: totalsTolerance,
         ok: true,
         skipReason: 'no_expected',
+      });
+    } else if (!hasAnyItemVat) {
+      checks.push({
+        name: 'vat_total',
+        scope: 'document',
+        expected: round2(expected),
+        actual: null,
+        diff: null,
+        tolerance: totalsTolerance,
+        ok: true,
+        skipReason: 'no_actual',
       });
     } else {
       const actual = sumNullable(items.map((i) => i.vatSum ?? null));
@@ -124,6 +156,17 @@ export function validateUpdTotals(parsed: UpdLikeForValidation): UpdValidation {
   }
 
   // 4) Построчно: qty × price ≈ sum.
+  //
+  // Tolerance расширен до max(1₽, 0.1% от sum). Причина: поставщики
+  // обычно печатают цену округлённой до 2 знаков, а сумму строки считают
+  // по неокруглённой. Пример (УПД 201/21125720, строка 1):
+  //   qty=600, price=65.49, sum=39295.08
+  //   qty × price = 39294.00, расхождение 1.08₽
+  //   реальная цена поставщика ≈ 65.4918, округлена до 65.49.
+  // Жёсткий tolerance в копейку давал false-positive почти на каждом
+  // реальном УПД. Расхождения «реальной» ошибки (перепутаны колонки,
+  // qty распознано как код товара) — в десятки раз больше суммы, так
+  // что чувствительность к настоящим багам сохраняется.
   items.forEach((it, idx) => {
     const row = idx + 1;
     const qty = it.qty ?? null;
@@ -144,14 +187,15 @@ export function validateUpdTotals(parsed: UpdLikeForValidation): UpdValidation {
     }
     const actual = round2(qty * price);
     const diff = round2(Math.abs(sum - actual));
+    const tolerance = round2(Math.max(1, Math.abs(sum) * 0.001));
     checks.push({
       name: 'row_qty_price',
       scope: { row },
       expected: round2(sum),
       actual,
       diff,
-      tolerance: ROW_TOLERANCE,
-      ok: diff <= ROW_TOLERANCE,
+      tolerance,
+      ok: diff <= tolerance,
     });
   });
 

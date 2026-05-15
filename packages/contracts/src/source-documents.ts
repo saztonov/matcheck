@@ -217,7 +217,11 @@ export const UpdPdfParsedSchema = z.object({
   supplier: UpdPdfPartySchema.nullable().optional(),
   recipient: UpdPdfPartySchema.nullable().optional(),
   items: z.array(UpdPdfItemSchema),
-  confidence: z.number().min(0).max(1).default(0.5),
+  // confidence — обязательное. Без default: если LLM не вернёт поле,
+  // Zod бросит ошибку парсинга, воркер пометит документ parse_failed.
+  // Раньше default(0.5) тихо подменял отсутствующее значение, и в UI у
+  // всех документов была уверенность 50% (см. лог УПД 201/21125720).
+  confidence: z.number().min(0).max(1),
 });
 export type UpdPdfParsed = z.infer<typeof UpdPdfParsedSchema>;
 

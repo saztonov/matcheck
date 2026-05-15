@@ -25,7 +25,8 @@ describe('parseUpdText — локальный парсер УПД-PDF', () => {
     expect(r.items[0].qty).toBe(1);
     expect(r.items[0].unit).toBe('шт');
     expect(r.items[0].price).toBeCloseTo(1992.33, 2);
-    expect(r.items[0].vatRate).toBe(20);
+    // vatRate/vatSum в items не извлекаются — поля убраны из UpdPdfItemSchema
+    // (см. миграцию 0016): бизнесу они в позициях не нужны.
     expect(r.confidence).toBeGreaterThan(0.5);
   });
 
@@ -42,7 +43,7 @@ describe('parseUpdText — локальный парсер УПД-PDF', () => {
     expect(r.items[0].qty).toBe(222);
     expect(r.items[0].price).toBeCloseTo(2049.18, 2);
     expect(r.items[0].sum).toBeCloseTo(454918.03, 2);
-    expect(r.items[0].vatRate).toBe(22);
+    // vatRate/vatSum в items не извлекаются (см. миграцию 0016).
   });
 
   it('УПД №20121125720 (5 позиций, неоднозначные пробелы в числах) — partition по qty*price≈sum', () => {

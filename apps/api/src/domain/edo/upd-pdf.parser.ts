@@ -18,7 +18,7 @@ export class PdfNoTextError extends Error {
 // (qty/price/sum). На уровне шапки vatSum оставлен.
 const RESPONSE_JSON_SCHEMA = {
   type: 'object',
-  required: ['items'],
+  required: ['items', 'confidence'],
   properties: {
     docNumber: { type: ['string', 'null'] },
     docDate: { type: ['string', 'null'], description: 'YYYY-MM-DD' },
@@ -80,7 +80,13 @@ const RESPONSE_JSON_SCHEMA = {
         },
       },
     },
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    confidence: {
+      type: 'number',
+      minimum: 0,
+      maximum: 1,
+      description:
+        'Оценка качества распознавания. ОБЯЗАТЕЛЬНО заполнять. Шкала: 0.9–1.0 — всё распозналось чётко, qty × price ≈ sum для всех строк, шапочные реквизиты на месте; 0.7–0.9 — мелкие округления (qty × price расходится с sum в пределах рубля); 0.4–0.7 — есть сомнительные строки или подозрение на перепутанные колонки; 0.0–0.4 — серьёзные проблемы (часть таблицы не распознана, нет шапки).',
+    },
   },
 };
 
