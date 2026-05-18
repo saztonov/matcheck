@@ -184,14 +184,80 @@ Authorization: Bearer <refreshToken>
 
 - Поле `kind: 'contractor' | 'return' | 'transfer' | 'writeoff'` — обязательно
   при upsert.
-- `receiverCounterpartyId` — обязателен для `contractor` и `return`.
-- `destSiteId` (другой объект-получатель) — обязателен для `transfer`,
-  должен отличаться от `siteId`.
-- `writeoff` — без `receiverCounterpartyId` и `destSiteId`.
+- Получатель указывается XOR через `receiverCounterpartyId` (контрагент) или
+  `receiverMolId` (МОЛ собственной бригады, см. справочник `/responsible-persons`).
+  Двух одновременно — нельзя.
+- `kind='contractor'` — обязателен любой из получателей.
+- `kind='return'` — только `receiverCounterpartyId` (поставщику).
+- `kind='transfer'` — обязательны `destSiteId` (другой объект-получатель,
+  отличный от `siteId`) и один из получателей. Сервер автоматически создаёт
+  парный `Delivery` со статусом `not_filled` на `destSiteId` (см. ниже).
+- `kind='writeoff'` — без получателя и без `destSiteId`.
 - Статусы: `not_filled` → `draft` → `shipped` → `confirmed_mol`.
+- Поля позиций: см. раздел ниже про `itemKind` (общий для приёмок и отгрузок).
 
 OCC ответ — `ShipmentConflictResponse` (структура идентична `ConflictResponse`
 для deliveries, только snapshot — `Shipment`).
+
+### Парные приёмки для transfer
+
+При `kind='transfer'` сервер в той же транзакции создаёт зеркальный
+`Delivery` на `destSiteId` со связью через `Delivery.sourceShipmentId`.
+Идемпотентно по `sourceShipmentId`: повторные PATCH'ы исходного shipment
+не плодят новых deliveries; уже заполненные инспектором destSite позиции
+и `arrivedAt` не перетираются.
+
+Инспектор объекта-получателя видит парный delivery в обычном списке
+`GET /deliveries` своего `siteId` и принимает его тем же потоком, что
+и приёмки по УПД. В DTO такого delivery дополнительно возвращаются
+плоские read-only поля:
+
+```json
+{
+  "sourceShipmentId": "uuid",
+  "sourceShipmentShippedAt": "2026-05-18T08:00:00.000Z",
+  "sourceShipmentSiteId": "uuid",
+  "sourceShipmentSiteCode": "MS-01"
+}
+```
+
+Эти поля позволяют UI показать «Перемещение с объекта MS-01, отгружено
+18.05.2026 08:00» без отдельного запроса.
+
+## Справочники МОЛ и ОС
+
+`GET /api/v1/responsible-persons` — справочник МОЛ (материально-ответственных
+лиц, руководителей собственных бригад). Поля: `id`, `fullName` (NOT NULL),
+`phone`, `position`, `isActive`. Используется как `receiverMolId` (shipments)
+и `recipientMolId` (deliveries). Параметры запроса: `q` (поиск по ФИО),
+`activeOnly`.
+
+`GET /api/v1/assets` — справочник ОС (основных средств: оборудование,
+инструмент, техника). Поля: `id`, `code`, `name`, `unit` ('шт' по умолчанию),
+`isActive`. Параметры: `q`, `activeOnly`.
+
+Оба справочника синхронизируются через `/sync` (массивы `responsiblePersons`,
+`assets`). Hard-delete пишется в `entity_deletions` с `entity_type` —
+`'responsible_person'` или `'asset'` — и приходит в `deletedIds.responsiblePersons`
+/ `deletedIds.assets` при дельта-sync.
+
+## Позиции: материалы и ОС (`itemKind`)
+
+В позициях `Delivery.items` / `Shipment.items` появилось поле `itemKind:
+'material' | 'asset'` (default `'material'`). Логика:
+
+- `itemKind='material'` — обычный материал, ссылка через `materialId`
+  (опциональна, для свободного ввода — только `nameRaw`).
+- `itemKind='asset'` — ОС, ссылка через `assetId` обязательна;
+  `materialId` должен быть `null`. Атрибуты конкретного экземпляра
+  передаются строкой документа: `inventoryNumber` (инв. №),
+  `serialNumber` (серийный №).
+
+CHECK-констрейнты на уровне БД гарантируют согласованность:
+`items_kind_target_chk` на `delivery_items` и `shipment_items`.
+
+UI рекомендуется отмечать позиции с `itemKind='asset'` стикером
+«ОС» (фиолетовый Tag) рядом с наименованием.
 
 ## Soft-delete (двухэтапное удаление)
 
@@ -328,13 +394,17 @@ OCC ответ — `ShipmentConflictResponse` (структура идентич
   "materials": [...],
   "sites": [...],
   "statuses": [...],
+  "responsiblePersons": [...],
+  "assets": [...],
   "sourceDocuments": [...],
   "deliveries": [...],
   "shipments": [...],
   "deletedIds": {
     "deliveries": ["uuid", ...],
     "shipments": ["uuid", ...],
-    "sourceDocuments": ["uuid", ...]
+    "sourceDocuments": ["uuid", ...],
+    "responsiblePersons": ["uuid", ...],
+    "assets": ["uuid", ...]
   }
 }
 ```
@@ -350,13 +420,16 @@ OCC ответ — `ShipmentConflictResponse` (структура идентич
 
 ### Что отдаёт inspector_kpp
 
-- `counterparties`, `materials`, `sites`, `statuses` — полностью (без siteId-фильтра).
+- `counterparties`, `materials`, `responsiblePersons`, `assets`, `sites`,
+  `statuses` — полностью (без siteId-фильтра, это глобальные справочники).
 - `deliveries`, `shipments` — по своему `siteId` (включая записи других
-  инспекторов на том же объекте).
+  инспекторов на том же объекте). Парные приёмки `transfer` приходят
+  естественным образом, потому что у них `siteId = destSiteId`.
 - `sourceDocuments` — по своему `siteId`, **только не привязанные** к
   приёмке/отгрузке (это сценарий «Inbox: ожидаемые УПД»).
-- `deletedIds` — id записей, физически удалённых после `since`, по своему
-  `siteId`. Пустые массивы при initial-sync.
+- `deletedIds.deliveries|shipments|sourceDocuments` — по своему `siteId`.
+  `deletedIds.responsiblePersons|assets` — глобально (без siteId-фильтра).
+  Пустые массивы при initial-sync.
 
 ### Limits на запрос
 
@@ -364,6 +437,8 @@ OCC ответ — `ShipmentConflictResponse` (структура идентич
 |---|---|
 | `counterparties` | 500 |
 | `materials` | 500 |
+| `responsiblePersons` | 500 |
+| `assets` | 500 |
 | `sites` | 500 |
 | `sourceDocuments` | 200 |
 | `deliveries` | 500 |

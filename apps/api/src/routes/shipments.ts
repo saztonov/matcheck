@@ -27,6 +27,7 @@ import {
   getStatusCodeById,
   resolveStatusId as resolveStatusIdShared,
 } from '../domain/statuses/lookup.js';
+import { syncPairedTransferDelivery } from '../domain/transfers/pair.js';
 import { publishEvent } from './events.js';
 
 const ListQuerySchema = z.object({
@@ -141,6 +142,7 @@ async function buildShipmentDto(app: any, id: string) {
     kind: s.kind,
     siteId: s.siteId,
     receiverCounterpartyId: s.receiverCounterpartyId,
+    receiverMolId: s.receiverMolId,
     destSiteId: s.destSiteId,
     vehiclePlate: s.vehiclePlate,
     driverName: s.driverName,
@@ -158,7 +160,11 @@ async function buildShipmentDto(app: any, id: string) {
     sourceDocumentIds: sources.map((x) => x.sourceDocumentId),
     items: items.map((i) => ({
       id: i.id,
+      itemKind: i.itemKind,
       materialId: i.materialId,
+      assetId: i.assetId,
+      inventoryNumber: i.inventoryNumber,
+      serialNumber: i.serialNumber,
       nameRaw: i.nameRaw,
       qtyPlanned: i.qtyPlanned,
       qtyActual: i.qtyActual,
@@ -335,6 +341,9 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
             }
             await updateShipment(app, existing, input, statusId, req.user?.id ?? null);
           }
+          if (input.kind === 'transfer') {
+            await syncPairedTransferDelivery(app, input.id);
+          }
           const dto = await buildShipmentDto(app, input.id);
           if (!dto) return reply.code(404).send({ error: 'not_found' });
           publishEvent(app, { type: 'shipment_updated', entityId: dto.id, ts: new Date().toISOString() });
@@ -342,6 +351,9 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         }
 
         const created = await createShipment(app, input, statusId, inspectorId);
+        if (input.kind === 'transfer') {
+          await syncPairedTransferDelivery(app, created.id);
+        }
         const dto = await buildShipmentDto(app, created.id);
         if (!dto) throw new Error('Shipment missing after create');
         publishEvent(app, { type: 'shipment_updated', entityId: dto.id, ts: new Date().toISOString() });
@@ -580,20 +592,34 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
 }
 
 function validateKindLinks(input: z.infer<typeof ShipmentUpsertSchema>): string | null {
-  const { kind, receiverCounterpartyId, destSiteId, siteId } = input;
-  if (kind === 'contractor' || kind === 'return') {
-    if (!receiverCounterpartyId) return 'Для отгрузки этого типа нужен получатель';
+  const { kind, receiverCounterpartyId, receiverMolId, destSiteId, siteId } = input;
+  // Получатель указан XOR через counterparty или МОЛ (двух одновременно — нельзя).
+  const hasContractorReceiver = Boolean(receiverCounterpartyId);
+  const hasMolReceiver = Boolean(receiverMolId);
+  const hasAnyReceiver = hasContractorReceiver || hasMolReceiver;
+  const hasBothReceivers = hasContractorReceiver && hasMolReceiver;
+
+  if (kind === 'contractor') {
+    if (hasBothReceivers) return 'Укажите получателя одним способом: подрядчик или МОЛ';
+    if (!hasAnyReceiver) return 'Для отгрузки нужен получатель (подрядчик или МОЛ)';
+    if (destSiteId) return 'destSiteId допустим только для перемещения';
+    return null;
+  }
+  if (kind === 'return') {
+    if (hasMolReceiver) return 'Возврат поставщику оформляется только на контрагента';
+    if (!hasContractorReceiver) return 'Для возврата нужен получатель-поставщик';
     if (destSiteId) return 'destSiteId допустим только для перемещения';
     return null;
   }
   if (kind === 'transfer') {
     if (!destSiteId) return 'Для перемещения нужен объект-получатель';
     if (destSiteId === siteId) return 'Объект-получатель не может совпадать с источником';
-    if (receiverCounterpartyId) return 'Контрагент-получатель не указывается при перемещении';
+    if (hasBothReceivers) return 'Укажите получателя одним способом: подрядчик или МОЛ';
+    if (!hasAnyReceiver) return 'Для перемещения нужен получатель на новом объекте (подрядчик или МОЛ)';
     return null;
   }
   // writeoff
-  if (receiverCounterpartyId || destSiteId) return 'Для списания получатель не указывается';
+  if (hasAnyReceiver || destSiteId) return 'Для списания получатель не указывается';
   return null;
 }
 
@@ -612,6 +638,7 @@ async function createShipment(
       kind: input.kind,
       siteId: input.siteId,
       receiverCounterpartyId: input.receiverCounterpartyId ?? null,
+      receiverMolId: input.receiverMolId ?? null,
       destSiteId: input.destSiteId ?? null,
       vehiclePlate: input.vehiclePlate ?? null,
       driverName: input.driverName ?? null,
@@ -626,7 +653,11 @@ async function createShipment(
     await app.db.insert(shipmentItems).values(
       input.items.map((i) => ({
         shipmentId: created.id,
-        materialId: i.materialId ?? null,
+        itemKind: i.itemKind,
+        materialId: i.itemKind === 'asset' ? null : (i.materialId ?? null),
+        assetId: i.itemKind === 'asset' ? (i.assetId ?? null) : null,
+        inventoryNumber: i.inventoryNumber ?? null,
+        serialNumber: i.serialNumber ?? null,
         nameRaw: i.nameRaw,
         qtyPlanned: i.qtyPlanned ?? null,
         qtyActual: i.qtyActual ?? null,
@@ -681,6 +712,7 @@ async function updateShipment(
       kind: input.kind,
       siteId: input.siteId,
       receiverCounterpartyId: input.receiverCounterpartyId ?? null,
+      receiverMolId: input.receiverMolId ?? null,
       destSiteId: input.destSiteId ?? null,
       vehiclePlate: input.vehiclePlate ?? null,
       driverName: input.driverName ?? null,
@@ -699,7 +731,11 @@ async function updateShipment(
     await app.db.insert(shipmentItems).values(
       input.items.map((i) => ({
         shipmentId: id,
-        materialId: i.materialId ?? null,
+        itemKind: i.itemKind,
+        materialId: i.itemKind === 'asset' ? null : (i.materialId ?? null),
+        assetId: i.itemKind === 'asset' ? (i.assetId ?? null) : null,
+        inventoryNumber: i.inventoryNumber ?? null,
+        serialNumber: i.serialNumber ?? null,
         nameRaw: i.nameRaw,
         qtyPlanned: i.qtyPlanned ?? null,
         qtyActual: i.qtyActual ?? null,

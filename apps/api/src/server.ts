@@ -17,6 +17,8 @@ import { authRoutes } from './routes/auth.js';
 import { counterpartyRoutes } from './routes/counterparties.js';
 import { siteRoutes } from './routes/sites.js';
 import { materialRoutes } from './routes/materials.js';
+import { responsiblePersonRoutes } from './routes/responsiblePersons.js';
+import { assetRoutes } from './routes/assets.js';
 import { sourceDocumentRoutes } from './routes/source-documents.js';
 import { deliveryRoutes } from './routes/deliveries.js';
 import { shipmentRoutes } from './routes/shipments.js';
@@ -63,6 +65,8 @@ export async function buildServer() {
   await app.register(counterpartyRoutes);
   await app.register(siteRoutes);
   await app.register(materialRoutes);
+  await app.register(responsiblePersonRoutes);
+  await app.register(assetRoutes);
   await app.register(sourceDocumentRoutes);
   await app.register(deliveryRoutes);
   await app.register(shipmentRoutes);

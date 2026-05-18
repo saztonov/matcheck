@@ -2,9 +2,16 @@ import { z } from 'zod';
 import { DeliveryStatusCodeSchema, StatusSchema } from './statuses.js';
 import { VolumeConfidenceSchema } from './source-documents.js';
 
+export const ItemKindSchema = z.enum(['material', 'asset']);
+export type ItemKind = z.infer<typeof ItemKindSchema>;
+
 export const DeliveryItemSchema = z.object({
   id: z.string().uuid(),
+  itemKind: ItemKindSchema,
   materialId: z.string().uuid().nullable(),
+  assetId: z.string().uuid().nullable(),
+  inventoryNumber: z.string().nullable(),
+  serialNumber: z.string().nullable(),
   nameRaw: z.string(),
   qtyPlanned: z.string().nullable(),
   qtyActual: z.string().nullable(),
@@ -38,6 +45,7 @@ export const DeliverySchema = z.object({
   siteId: z.string().uuid(),
   supplierId: z.string().uuid().nullable(),
   contractorId: z.string().uuid().nullable(),
+  recipientMolId: z.string().uuid().nullable(),
   vehiclePlate: z.string().nullable(),
   driverName: z.string().nullable(),
   arrivedAt: z.string().nullable(),
@@ -52,6 +60,13 @@ export const DeliverySchema = z.object({
   pendingDeletionReason: z.string().nullable(),
   version: z.number(),
   sourceDocumentIds: z.array(z.string().uuid()),
+  // Для парных приёмок, созданных из shipment.kind='transfer': указывает
+  // на исходный shipment и подтягивает плоские поля исходного объекта/даты
+  // отгрузки. Read-only, заполняется сервером.
+  sourceShipmentId: z.string().uuid().nullable(),
+  sourceShipmentShippedAt: z.string().nullable(),
+  sourceShipmentSiteId: z.string().uuid().nullable(),
+  sourceShipmentSiteCode: z.string().nullable(),
   items: z.array(DeliveryItemSchema),
   photos: z.array(DeliveryPhotoSchema),
   createdAt: z.string(),
@@ -66,7 +81,11 @@ export type DeliveryMarkDeletion = z.infer<typeof DeliveryMarkDeletionSchema>;
 
 export const DeliveryUpsertItemSchema = z.object({
   id: z.string().uuid().optional(),
+  itemKind: ItemKindSchema.default('material'),
   materialId: z.string().uuid().nullable().optional(),
+  assetId: z.string().uuid().nullable().optional(),
+  inventoryNumber: z.string().max(200).nullable().optional(),
+  serialNumber: z.string().max(200).nullable().optional(),
   nameRaw: z.string().min(1),
   qtyPlanned: z.string().nullable().optional(),
   qtyActual: z.string().nullable().optional(),
@@ -85,6 +104,7 @@ export const DeliveryUpsertSchema = z.object({
   siteId: z.string().uuid(),
   supplierId: z.string().uuid().nullable().optional(),
   contractorId: z.string().uuid().nullable().optional(),
+  recipientMolId: z.string().uuid().nullable().optional(),
   vehiclePlate: z.string().max(16).nullable().optional(),
   driverName: z.string().max(200).nullable().optional(),
   arrivedAt: z.string().nullable().optional(),

@@ -30,6 +30,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Counterparty,
+  ResponsiblePerson,
   Shipment,
   ShipmentKind,
   ShipmentPhoto,
@@ -52,6 +53,7 @@ import {
   unmarkDeletion as unmarkShipmentDeletion,
   upsertServerSnapshot,
 } from '../../services/shipments';
+import { AssetTag } from '../../shared/ui/AssetTag';
 import { PendingDeletionTag } from '../../shared/ui/PendingDeletionTag';
 import { runSync } from '../../services/sync';
 import { db, SYSTEM_SITE_ID } from '../../lib/db';
@@ -68,6 +70,13 @@ type DraftItem = {
   qtyActual: string | null;
   unit: string;
   materialId: string | null;
+  // Поддержка ОС в позициях: itemKind='asset' визуально отмечается стикером
+  // AssetTag. assetId/inventoryNumber/serialNumber — атрибуты конкретного
+  // экземпляра, заполняются для itemKind='asset'.
+  itemKind: 'material' | 'asset';
+  assetId: string | null;
+  inventoryNumber: string | null;
+  serialNumber: string | null;
 };
 
 const KIND_OPTIONS: { label: string; value: ShipmentKind }[] = [
@@ -122,6 +131,10 @@ export default function ShipmentPage() {
   const [kind, setKind] = useState<ShipmentKind>('contractor');
   const [siteId, setSiteId] = useState<string | null>(inspectorSiteId);
   const [destSiteId, setDestSiteId] = useState<string | null>(null);
+  // Тип получателя для kind in ('contractor','transfer'): подрядчик из counterparties
+  // или МОЛ из responsible_persons. Для kind='return' принудительно 'counterparty'
+  // (возврат — только поставщику). receiverId хранит выбранный id выбранного типа.
+  const [receiverKind, setReceiverKind] = useState<'counterparty' | 'mol'>('counterparty');
   const [receiverId, setReceiverId] = useState<string | null>(null);
   const [plate, setPlate] = useState('');
   const [driverName, setDriverName] = useState('');
@@ -140,6 +153,7 @@ export default function ShipmentPage() {
       setKind('contractor');
       setSiteId(inspectorSiteId);
       setDestSiteId(null);
+      setReceiverKind('counterparty');
       setReceiverId(null);
       setPlate('');
       setDriverName('');
@@ -158,11 +172,19 @@ export default function ShipmentPage() {
     queryFn: () =>
       api.get<{ items: Counterparty[]; total: number }>('/counterparties?limit=500'),
   });
+  const responsiblePersonsQuery = useQuery({
+    queryKey: ['responsible-persons', 'active'],
+    queryFn: () =>
+      api.get<{ items: ResponsiblePerson[]; total: number }>(
+        '/responsible-persons?activeOnly=true&limit=500',
+      ),
+  });
 
   const sites = sitesQuery.data?.items ?? [];
   const counterparties = counterpartiesQuery.data?.items ?? [];
+  const responsiblePersons = responsiblePersonsQuery.data?.items ?? [];
   // Для возврата фильтруем по supplier; для contractor — любые контрагенты.
-  const receiverOptions =
+  const counterpartyReceiverOptions =
     kind === 'return' ? counterparties.filter((c) => c.isSupplier) : counterparties;
 
   const shipmentQuery = useQuery({
@@ -221,7 +243,15 @@ export default function ShipmentPage() {
         setSiteId((prev) => prev ?? (s.siteId === SYSTEM_SITE_ID ? null : s.siteId));
       }
       setDestSiteId((prev) => prev ?? s.destSiteId ?? null);
-      setReceiverId((prev) => prev ?? s.receiverCounterpartyId ?? null);
+      // Восстанавливаем выбранный тип получателя из сервера: если есть
+      // receiverMolId — это МОЛ; иначе counterparty (даже если оба null).
+      if (s.receiverMolId) {
+        setReceiverKind('mol');
+        setReceiverId((prev) => prev ?? s.receiverMolId);
+      } else {
+        setReceiverKind('counterparty');
+        setReceiverId((prev) => prev ?? s.receiverCounterpartyId ?? null);
+      }
       setPlate(s.vehiclePlate ?? '');
       setDriverName(s.driverName ?? '');
       setComment(s.comment ?? '');
@@ -233,6 +263,10 @@ export default function ShipmentPage() {
           qtyActual: it.qtyActual ?? it.qtyPlanned,
           unit: it.unit,
           materialId: it.materialId,
+          itemKind: it.itemKind,
+          assetId: it.assetId,
+          inventoryNumber: it.inventoryNumber,
+          serialNumber: it.serialNumber,
         })),
       );
     }
@@ -298,7 +332,11 @@ export default function ShipmentPage() {
         sourceDocumentIds: [upd.id],
         items: detail.items.map((it, i) => ({
           id: crypto.randomUUID(),
+          itemKind: 'material' as const,
           materialId: it.materialId ?? null,
+          assetId: null,
+          inventoryNumber: null,
+          serialNumber: null,
           nameRaw: it.nameRaw,
           qtyPlanned: it.qty,
           qtyActual: it.qty,
@@ -363,6 +401,10 @@ export default function ShipmentPage() {
         qtyActual: null,
         unit: 'шт',
         materialId: null,
+        itemKind: 'material',
+        assetId: null,
+        inventoryNumber: null,
+        serialNumber: null,
       },
     ]);
   };
@@ -381,7 +423,14 @@ export default function ShipmentPage() {
       kind,
       siteId: siteId ?? loadedShipment.siteId,
       receiverCounterpartyId:
-        kind === 'contractor' || kind === 'return' ? receiverId : null,
+        (kind === 'contractor' || kind === 'return' || kind === 'transfer') &&
+        receiverKind === 'counterparty'
+          ? receiverId
+          : null,
+      receiverMolId:
+        (kind === 'contractor' || kind === 'transfer') && receiverKind === 'mol'
+          ? receiverId
+          : null,
       destSiteId: kind === 'transfer' ? destSiteId : null,
       vehiclePlate: plate || null,
       driverName: driverName || null,
@@ -391,7 +440,11 @@ export default function ShipmentPage() {
         .filter((i) => i.nameRaw.trim().length > 0)
         .map((i) => ({
           id: crypto.randomUUID(),
-          materialId: i.materialId,
+          itemKind: i.itemKind,
+          materialId: i.itemKind === 'asset' ? null : i.materialId,
+          assetId: i.itemKind === 'asset' ? i.assetId : null,
+          inventoryNumber: i.inventoryNumber,
+          serialNumber: i.serialNumber,
           nameRaw: i.nameRaw,
           qtyPlanned: null,
           qtyActual: i.qtyActual,
@@ -510,6 +563,7 @@ export default function ShipmentPage() {
     if (kind === 'transfer') {
       if (!destSiteId) reasons.push('Выберите объект «Куда»');
       else if (destSiteId === siteId) reasons.push('Объект-приёмник должен отличаться от источника');
+      if (!receiverId) reasons.push('Выберите получателя на новом объекте');
     }
     if (!plate.trim()) reasons.push('Заполните госномер');
     if (photosCount === 0) reasons.push('Сделайте хотя бы одно фото');
@@ -526,12 +580,29 @@ export default function ShipmentPage() {
         title: 'Название',
         dataIndex: 'nameRaw',
         render: (_: unknown, r: DraftItem) => (
-          <Input.TextArea
-            autoSize={{ minRows: 1, maxRows: 4 }}
-            value={r.nameRaw}
-            placeholder="Наименование"
-            onChange={(e) => updateField(r.clientKey, { nameRaw: e.target.value })}
-          />
+          <Space.Compact direction="vertical" style={{ width: '100%' }}>
+            {r.itemKind === 'asset' && (
+              <Space size={4} style={{ marginBottom: 4 }}>
+                <AssetTag />
+                {r.inventoryNumber && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Инв. № {r.inventoryNumber}
+                  </Typography.Text>
+                )}
+                {r.serialNumber && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    SN {r.serialNumber}
+                  </Typography.Text>
+                )}
+              </Space>
+            )}
+            <Input.TextArea
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              value={r.nameRaw}
+              placeholder="Наименование"
+              onChange={(e) => updateField(r.clientKey, { nameRaw: e.target.value })}
+            />
+          </Space.Compact>
         ),
       },
       {
@@ -594,6 +665,21 @@ export default function ShipmentPage() {
           <Button size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>
       </Space>
+      {r.itemKind === 'asset' && (
+        <Space size={4} style={{ marginTop: 4 }} wrap>
+          <AssetTag />
+          {r.inventoryNumber && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Инв. № {r.inventoryNumber}
+            </Typography.Text>
+          )}
+          {r.serialNumber && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              SN {r.serialNumber}
+            </Typography.Text>
+          )}
+        </Space>
+      )}
       <Input.TextArea
         autoSize={{ minRows: 1, maxRows: 4 }}
         value={r.nameRaw}
@@ -724,12 +810,18 @@ export default function ShipmentPage() {
             onChange={(v) => {
               const next = v as ShipmentKind;
               setKind(next);
-              if (next === 'transfer') setReceiverId(null);
-              else setDestSiteId(null);
+              if (next !== 'transfer') setDestSiteId(null);
               if (next === 'writeoff') {
                 setReceiverId(null);
                 setDestSiteId(null);
               }
+              if (next === 'return') {
+                // Возврат — только counterparty (поставщик).
+                setReceiverKind('counterparty');
+              }
+              // Между сменой kind сбрасываем выбранный id: подрядчики и МОЛ
+              // имеют разные id-пространства, чтобы не отправить чужой.
+              setReceiverId(null);
             }}
           />
         </Card>
@@ -786,7 +878,7 @@ export default function ShipmentPage() {
               </Card>
             </Col>
           )}
-          {(kind === 'contractor' || kind === 'return') && (
+          {(kind === 'contractor' || kind === 'return' || kind === 'transfer') && (
             <Col xs={24} sm={12} md={6}>
               <Card
                 size="small"
@@ -797,17 +889,51 @@ export default function ShipmentPage() {
                 }
                 styles={{ body: { padding: 12 } }}
               >
-                <Select<string>
-                  size="large"
-                  style={{ width: '100%' }}
-                  placeholder={kind === 'return' ? 'Поставщик' : 'Контрагент'}
-                  value={receiverId ?? undefined}
-                  onChange={(v) => setReceiverId(v)}
-                  showSearch
-                  optionFilterProp="label"
-                  loading={counterpartiesQuery.isLoading}
-                  options={receiverOptions.map((c) => ({ value: c.id, label: c.name }))}
-                />
+                {/* Для return — только поставщик (counterparty), переключатель скрыт.
+                    Для contractor и transfer — выбор «Подрядчик / МОЛ». */}
+                {kind !== 'return' && (
+                  <Segmented
+                    block
+                    style={{ marginBottom: 8 }}
+                    options={[
+                      { label: 'Подрядчик', value: 'counterparty' },
+                      { label: 'МОЛ', value: 'mol' },
+                    ]}
+                    value={receiverKind}
+                    onChange={(v) => {
+                      setReceiverKind(v as 'counterparty' | 'mol');
+                      setReceiverId(null);
+                    }}
+                  />
+                )}
+                {receiverKind === 'counterparty' ? (
+                  <Select<string>
+                    size="large"
+                    style={{ width: '100%' }}
+                    placeholder={kind === 'return' ? 'Поставщик' : 'Контрагент'}
+                    value={receiverId ?? undefined}
+                    onChange={(v) => setReceiverId(v)}
+                    showSearch
+                    optionFilterProp="label"
+                    loading={counterpartiesQuery.isLoading}
+                    options={counterpartyReceiverOptions.map((c) => ({
+                      value: c.id,
+                      label: c.name,
+                    }))}
+                  />
+                ) : (
+                  <Select<string>
+                    size="large"
+                    style={{ width: '100%' }}
+                    placeholder="МОЛ"
+                    value={receiverId ?? undefined}
+                    onChange={(v) => setReceiverId(v)}
+                    showSearch
+                    optionFilterProp="label"
+                    loading={responsiblePersonsQuery.isLoading}
+                    options={responsiblePersons.map((m) => ({ value: m.id, label: m.fullName }))}
+                  />
+                )}
               </Card>
             </Col>
           )}

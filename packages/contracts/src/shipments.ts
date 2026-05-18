@@ -1,13 +1,18 @@
 import { z } from 'zod';
 import { ShipmentStatusCodeSchema, StatusSchema } from './statuses.js';
 import { VolumeConfidenceSchema } from './source-documents.js';
+import { ItemKindSchema } from './deliveries.js';
 
 export const ShipmentKindSchema = z.enum(['contractor', 'return', 'transfer', 'writeoff']);
 export type ShipmentKind = z.infer<typeof ShipmentKindSchema>;
 
 export const ShipmentItemSchema = z.object({
   id: z.string().uuid(),
+  itemKind: ItemKindSchema,
   materialId: z.string().uuid().nullable(),
+  assetId: z.string().uuid().nullable(),
+  inventoryNumber: z.string().nullable(),
+  serialNumber: z.string().nullable(),
   nameRaw: z.string(),
   qtyPlanned: z.string().nullable(),
   qtyActual: z.string().nullable(),
@@ -39,6 +44,7 @@ export const ShipmentSchema = z.object({
   kind: ShipmentKindSchema,
   siteId: z.string().uuid(),
   receiverCounterpartyId: z.string().uuid().nullable(),
+  receiverMolId: z.string().uuid().nullable(),
   destSiteId: z.string().uuid().nullable(),
   vehiclePlate: z.string().nullable(),
   driverName: z.string().nullable(),
@@ -68,7 +74,11 @@ export type ShipmentMarkDeletion = z.infer<typeof ShipmentMarkDeletionSchema>;
 
 export const ShipmentUpsertItemSchema = z.object({
   id: z.string().uuid().optional(),
+  itemKind: ItemKindSchema.default('material'),
   materialId: z.string().uuid().nullable().optional(),
+  assetId: z.string().uuid().nullable().optional(),
+  inventoryNumber: z.string().max(200).nullable().optional(),
+  serialNumber: z.string().max(200).nullable().optional(),
   nameRaw: z.string().min(1),
   qtyPlanned: z.string().nullable().optional(),
   qtyActual: z.string().nullable().optional(),
@@ -87,6 +97,7 @@ export const ShipmentUpsertSchema = z.object({
   kind: ShipmentKindSchema,
   siteId: z.string().uuid(),
   receiverCounterpartyId: z.string().uuid().nullable().optional(),
+  receiverMolId: z.string().uuid().nullable().optional(),
   destSiteId: z.string().uuid().nullable().optional(),
   vehiclePlate: z.string().max(16).nullable().optional(),
   driverName: z.string().max(200).nullable().optional(),

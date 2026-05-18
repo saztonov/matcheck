@@ -14,6 +14,8 @@ const ShipmentPage = lazy(() => import('../pages/shipments/ShipmentPage'));
 const Sites = lazy(() => import('../pages/references/Sites'));
 const Counterparties = lazy(() => import('../pages/references/Counterparties'));
 const Materials = lazy(() => import('../pages/references/Materials'));
+const ResponsiblePersons = lazy(() => import('../pages/references/ResponsiblePersons'));
+const Assets = lazy(() => import('../pages/references/Assets'));
 const MaterialsJournal = lazy(() => import('../pages/materials/MaterialsPage'));
 const AdminUsers = lazy(() => import('../pages/admin/Users'));
 const AdminLlmProviders = lazy(() => import('../pages/admin/LlmProviders'));
@@ -69,7 +71,9 @@ export const router = createBrowserRouter([
           { index: true, element: <Navigate to="/references/sites" replace /> },
           { path: 'sites', element: suspense(<Sites />) },
           { path: 'counterparties', element: suspense(<Counterparties />) },
+          { path: 'responsible-persons', element: suspense(<ResponsiblePersons />) },
           { path: 'materials', element: suspense(<Materials />) },
+          { path: 'assets', element: suspense(<Assets />) },
         ],
       },
       {

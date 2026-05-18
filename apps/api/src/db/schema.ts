@@ -27,6 +27,10 @@ export const shipmentKindEnum = pgEnum('shipment_kind', [
   'transfer',
   'writeoff',
 ]);
+// Тип позиции документа: обычный материал или ОС (основное средство).
+// См. миграцию 0029. Constraint на согласованность asset_id/material_id —
+// на уровне таблиц delivery_items / shipment_items.
+export const itemKindEnum = pgEnum('item_kind', ['material', 'asset']);
 export const sourceKindEnum = pgEnum('source_kind', ['upd', 'request']);
 export const sourceOriginEnum = pgEnum('source_origin', [
   'edo_diadoc',
@@ -206,6 +210,55 @@ export const materials = pgTable(
       .on(t.code)
       .where(sql`${t.code} is not null`),
     index('material_name_idx').on(t.name),
+  ],
+);
+
+// ─── Справочник МОЛ (материально-ответственные лица собственных бригад) ────
+// См. миграцию 0027. Параллелен counterparties с ролью contractor:
+// получатели материалов и ОС, на которых оформляется документ. Не путать
+// с deliveries.confirmed_by_mol_user_id (там — пользователь системы).
+
+export const responsiblePersons = pgTable(
+  'responsible_persons',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    fullName: text('full_name').notNull(),
+    phone: text('phone'),
+    position: text('position'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('responsible_persons_active_name_idx')
+      .on(t.fullName)
+      .where(sql`${t.isActive}`),
+  ],
+);
+
+// ─── Справочник ОС (основных средств) ─────────────────────────────────────
+// См. миграцию 0028. Используется в позициях документов через item_kind='asset'
+// (миграция 0029). Один экземпляр ОС в строке документа дополнительно
+// характеризуется inventory_number / serial_number.
+
+export const assets = pgTable(
+  'assets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    code: varchar('code', { length: 64 }),
+    name: text('name').notNull(),
+    unit: varchar('unit', { length: 16 }).notNull().default('шт'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('asset_code_unique')
+      .on(t.code)
+      .where(sql`${t.code} is not null`),
+    index('asset_active_name_idx')
+      .on(t.name)
+      .where(sql`${t.isActive}`),
   ],
 );
 
@@ -489,6 +542,14 @@ export const deliveries = pgTable(
       onDelete: 'set null',
     }),
     confirmedByMolAt: timestamp('confirmed_by_mol_at', { withTimezone: true }),
+    // МОЛ-получатель приёмки (физлицо собственной бригады). Альтернатива
+    // contractor_id. CHECK не позволяет заполнить оба одновременно (миграция 0030).
+    recipientMolId: uuid('recipient_mol_id').references(() => responsiblePersons.id, {
+      onDelete: 'set null',
+    }),
+    // Источник для парных delivery, создаваемых из shipment.kind='transfer'.
+    // Уникален по миграции 0031: один shipment → не более одного парного delivery.
+    sourceShipmentId: uuid('source_shipment_id'),
     // Soft-delete: пометка на удаление. Окончательно стирает только админ.
     // Применимо к статусам filled/confirmed_mol; CHECK гарантирует, что три
     // поля заполнены/пусты согласованно.
@@ -506,12 +567,25 @@ export const deliveries = pgTable(
     index('deliveries_contractor_idx')
       .on(t.contractorId)
       .where(sql`${t.contractorId} is not null`),
+    index('deliveries_recipient_mol_idx')
+      .on(t.recipientMolId)
+      .where(sql`${t.recipientMolId} is not null`),
+    uniqueIndex('deliveries_source_shipment_unique')
+      .on(t.sourceShipmentId)
+      .where(sql`${t.sourceShipmentId} is not null`),
+    index('deliveries_arrived_at_idx')
+      .on(t.siteId, t.arrivedAt)
+      .where(sql`${t.arrivedAt} is not null`),
     index('deliveries_pending_deletion_idx')
       .on(t.siteId, t.pendingDeletionAt)
       .where(sql`${t.pendingDeletionAt} is not null`),
     check(
       'deliveries_pending_deletion_chk',
       sql`(${t.pendingDeletionAt} is null and ${t.pendingDeletionByUserId} is null) or (${t.pendingDeletionAt} is not null and ${t.pendingDeletionByUserId} is not null)`,
+    ),
+    check(
+      'deliveries_recipient_chk',
+      sql`NOT (${t.contractorId} is not null AND ${t.recipientMolId} is not null)`,
     ),
   ],
 );
@@ -532,23 +606,39 @@ export const deliverySources = pgTable(
   ],
 );
 
-export const deliveryItems = pgTable('delivery_items', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  deliveryId: uuid('delivery_id')
-    .notNull()
-    .references(() => deliveries.id, { onDelete: 'cascade' }),
-  materialId: uuid('material_id').references(() => materials.id, { onDelete: 'set null' }),
-  nameRaw: text('name_raw').notNull(),
-  qtyPlanned: numeric('qty_planned', { precision: 18, scale: 4 }),
-  qtyActual: numeric('qty_actual', { precision: 18, scale: 4 }),
-  unit: varchar('unit', { length: 16 }).notNull().default('шт'),
-  comment: text('comment'),
-  lineNo: integer('line_no').notNull(),
-  volumeM3: numeric('volume_m3', { precision: 10, scale: 4 }),
-  massKg: numeric('mass_kg', { precision: 10, scale: 3 }),
-  volumeConfidence: text('volume_confidence'),
-  groupName: text('group_name'),
-});
+export const deliveryItems = pgTable(
+  'delivery_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deliveryId: uuid('delivery_id')
+      .notNull()
+      .references(() => deliveries.id, { onDelete: 'cascade' }),
+    materialId: uuid('material_id').references(() => materials.id, { onDelete: 'set null' }),
+    // Тип позиции: 'material' (по умолчанию) или 'asset' (ОС). См. миграцию 0029.
+    itemKind: itemKindEnum('item_kind').notNull().default('material'),
+    assetId: uuid('asset_id').references(() => assets.id, { onDelete: 'set null' }),
+    inventoryNumber: text('inventory_number'),
+    serialNumber: text('serial_number'),
+    nameRaw: text('name_raw').notNull(),
+    qtyPlanned: numeric('qty_planned', { precision: 18, scale: 4 }),
+    qtyActual: numeric('qty_actual', { precision: 18, scale: 4 }),
+    unit: varchar('unit', { length: 16 }).notNull().default('шт'),
+    comment: text('comment'),
+    lineNo: integer('line_no').notNull(),
+    volumeM3: numeric('volume_m3', { precision: 10, scale: 4 }),
+    massKg: numeric('mass_kg', { precision: 10, scale: 3 }),
+    volumeConfidence: text('volume_confidence'),
+    groupName: text('group_name'),
+  },
+  (t) => [
+    index('delivery_items_asset_idx').on(t.assetId).where(sql`${t.assetId} is not null`),
+    check(
+      'delivery_items_kind_target_chk',
+      sql`(${t.itemKind} = 'material' AND ${t.assetId} IS NULL)
+          OR (${t.itemKind} = 'asset' AND ${t.assetId} IS NOT NULL AND ${t.materialId} IS NULL)`,
+    ),
+  ],
+);
 
 export const deliveryPhotos = pgTable(
   'delivery_photos',
@@ -599,6 +689,12 @@ export const shipments = pgTable(
     receiverCounterpartyId: uuid('receiver_counterparty_id').references(() => counterparties.id, {
       onDelete: 'set null',
     }),
+    // МОЛ-получатель отгрузки (физлицо собственной бригады). Альтернатива
+    // receiver_counterparty_id для kind in ('contractor','transfer').
+    // См. миграцию 0030 и shipments_kind_links_chk.
+    receiverMolId: uuid('receiver_mol_id').references(() => responsiblePersons.id, {
+      onDelete: 'set null',
+    }),
     destSiteId: uuid('dest_site_id').references(() => sites.id, { onDelete: 'restrict' }),
     vehiclePlate: varchar('vehicle_plate', { length: 16 }),
     driverName: text('driver_name'),
@@ -629,6 +725,12 @@ export const shipments = pgTable(
     index('shipment_receiver_idx')
       .on(t.receiverCounterpartyId)
       .where(sql`${t.receiverCounterpartyId} is not null`),
+    index('shipments_receiver_mol_idx')
+      .on(t.receiverMolId)
+      .where(sql`${t.receiverMolId} is not null`),
+    index('shipments_shipped_at_idx')
+      .on(t.siteId, t.shippedAt)
+      .where(sql`${t.shippedAt} is not null`),
     index('shipments_pending_deletion_idx')
       .on(t.siteId, t.pendingDeletionAt)
       .where(sql`${t.pendingDeletionAt} is not null`),
@@ -636,13 +738,25 @@ export const shipments = pgTable(
       'shipments_pending_deletion_chk',
       sql`(${t.pendingDeletionAt} is null and ${t.pendingDeletionByUserId} is null) or (${t.pendingDeletionAt} is not null and ${t.pendingDeletionByUserId} is not null)`,
     ),
+    // Соответствие kind и набора получателей/направления. См. миграцию 0030.
     check(
       'shipments_kind_links_chk',
       sql`(
-        (${t.kind} = 'contractor' AND ${t.receiverCounterpartyId} IS NOT NULL AND ${t.destSiteId} IS NULL)
-        OR (${t.kind} = 'return'    AND ${t.receiverCounterpartyId} IS NOT NULL AND ${t.destSiteId} IS NULL)
-        OR (${t.kind} = 'transfer'  AND ${t.receiverCounterpartyId} IS NULL     AND ${t.destSiteId} IS NOT NULL AND ${t.destSiteId} <> ${t.siteId})
-        OR (${t.kind} = 'writeoff'  AND ${t.receiverCounterpartyId} IS NULL     AND ${t.destSiteId} IS NULL)
+        (${t.kind} = 'contractor'
+          AND ((${t.receiverCounterpartyId} IS NOT NULL) <> (${t.receiverMolId} IS NOT NULL))
+          AND ${t.destSiteId} IS NULL)
+        OR (${t.kind} = 'return'
+          AND ${t.receiverCounterpartyId} IS NOT NULL
+          AND ${t.receiverMolId} IS NULL
+          AND ${t.destSiteId} IS NULL)
+        OR (${t.kind} = 'transfer'
+          AND ${t.destSiteId} IS NOT NULL
+          AND ${t.destSiteId} <> ${t.siteId}
+          AND ((${t.receiverCounterpartyId} IS NOT NULL) <> (${t.receiverMolId} IS NOT NULL)))
+        OR (${t.kind} = 'writeoff'
+          AND ${t.receiverCounterpartyId} IS NULL
+          AND ${t.receiverMolId} IS NULL
+          AND ${t.destSiteId} IS NULL)
       )`,
     ),
   ],
@@ -672,6 +786,11 @@ export const shipmentItems = pgTable(
       .notNull()
       .references(() => shipments.id, { onDelete: 'cascade' }),
     materialId: uuid('material_id').references(() => materials.id, { onDelete: 'set null' }),
+    // Тип позиции: 'material' (по умолчанию) или 'asset' (ОС). См. миграцию 0029.
+    itemKind: itemKindEnum('item_kind').notNull().default('material'),
+    assetId: uuid('asset_id').references(() => assets.id, { onDelete: 'set null' }),
+    inventoryNumber: text('inventory_number'),
+    serialNumber: text('serial_number'),
     nameRaw: text('name_raw').notNull(),
     qtyPlanned: numeric('qty_planned', { precision: 18, scale: 4 }),
     qtyActual: numeric('qty_actual', { precision: 18, scale: 4 }),
@@ -683,7 +802,15 @@ export const shipmentItems = pgTable(
     volumeConfidence: text('volume_confidence'),
     groupName: text('group_name'),
   },
-  (t) => [index('shipment_items_material_idx').on(t.materialId)],
+  (t) => [
+    index('shipment_items_material_idx').on(t.materialId),
+    index('shipment_items_asset_idx').on(t.assetId).where(sql`${t.assetId} is not null`),
+    check(
+      'shipment_items_kind_target_chk',
+      sql`(${t.itemKind} = 'material' AND ${t.assetId} IS NULL)
+          OR (${t.itemKind} = 'asset' AND ${t.assetId} IS NOT NULL AND ${t.materialId} IS NULL)`,
+    ),
+  ],
 );
 
 export const shipmentPhotos = pgTable(
@@ -721,7 +848,8 @@ export const entityDeletions = pgTable(
   'entity_deletions',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    // 'delivery' | 'shipment' | 'source_document' — CHECK в миграции 0025.
+    // 'delivery' | 'shipment' | 'source_document' | 'asset' | 'responsible_person' —
+    // CHECK в миграциях 0025 (исходный) и 0032 (расширение).
     entityType: text('entity_type').notNull(),
     entityId: uuid('entity_id').notNull(),
     siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
@@ -737,7 +865,7 @@ export const entityDeletions = pgTable(
       .where(sql`${t.siteId} is not null`),
     check(
       'entity_deletions_type_chk',
-      sql`${t.entityType} in ('delivery', 'shipment', 'source_document')`,
+      sql`${t.entityType} in ('delivery', 'shipment', 'source_document', 'asset', 'responsible_person')`,
     ),
   ],
 );

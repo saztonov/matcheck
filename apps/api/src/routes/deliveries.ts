@@ -18,6 +18,8 @@ import {
   deliveryPhotos,
   deliverySources,
   entityDeletions,
+  shipments,
+  sites,
   statuses,
   users,
 } from '../db/schema.js';
@@ -79,6 +81,8 @@ const resolveStatusId = (app: any, code: string) =>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildDeliveryDto(app: any, id: string) {
   // Два независимых join на users: один на МОЛ, другой на автора soft-delete пометки.
+  // Для парных приёмок (transfer) подтягиваем плоско дату отгрузки и
+  // объект-источник из связанного shipment + sites.
   const pendingUser = alias(users, 'pending_user');
   const rows = await app.db
     .select({
@@ -86,11 +90,16 @@ async function buildDeliveryDto(app: any, id: string) {
       s: statuses,
       molEmail: users.email,
       pendingEmail: pendingUser.email,
+      srcShippedAt: shipments.shippedAt,
+      srcSiteId: shipments.siteId,
+      srcSiteCode: sites.code,
     })
     .from(deliveries)
     .innerJoin(statuses, eq(deliveries.statusId, statuses.id))
     .leftJoin(users, eq(deliveries.confirmedByMolUserId, users.id))
     .leftJoin(pendingUser, eq(deliveries.pendingDeletionByUserId, pendingUser.id))
+    .leftJoin(shipments, eq(deliveries.sourceShipmentId, shipments.id))
+    .leftJoin(sites, eq(shipments.siteId, sites.id))
     .where(eq(deliveries.id, id))
     .limit(1);
   const r = rows[0] as
@@ -99,6 +108,9 @@ async function buildDeliveryDto(app: any, id: string) {
         s: StatusRow;
         molEmail: string | null;
         pendingEmail: string | null;
+        srcShippedAt: Date | null;
+        srcSiteId: string | null;
+        srcSiteCode: string | null;
       }
     | undefined;
   if (!r) return null;
@@ -130,6 +142,7 @@ async function buildDeliveryDto(app: any, id: string) {
     siteId: d.siteId,
     supplierId: d.supplierId,
     contractorId: d.contractorId,
+    recipientMolId: d.recipientMolId,
     vehiclePlate: d.vehiclePlate,
     driverName: d.driverName,
     arrivedAt: d.arrivedAt?.toISOString() ?? null,
@@ -144,9 +157,17 @@ async function buildDeliveryDto(app: any, id: string) {
     pendingDeletionReason: d.pendingDeletionReason,
     version: d.version,
     sourceDocumentIds: sources.map((x) => x.sourceDocumentId),
+    sourceShipmentId: d.sourceShipmentId,
+    sourceShipmentShippedAt: r.srcShippedAt?.toISOString() ?? null,
+    sourceShipmentSiteId: r.srcSiteId,
+    sourceShipmentSiteCode: r.srcSiteCode,
     items: items.map((i) => ({
       id: i.id,
+      itemKind: i.itemKind,
       materialId: i.materialId,
+      assetId: i.assetId,
+      inventoryNumber: i.inventoryNumber,
+      serialNumber: i.serialNumber,
       nameRaw: i.nameRaw,
       qtyPlanned: i.qtyPlanned,
       qtyActual: i.qtyActual,
@@ -582,6 +603,7 @@ async function createDelivery(
       siteId: input.siteId,
       supplierId: input.supplierId ?? null,
       contractorId: input.contractorId ?? null,
+      recipientMolId: input.recipientMolId ?? null,
       vehiclePlate: input.vehiclePlate ?? null,
       driverName: input.driverName ?? null,
       arrivedAt: input.arrivedAt ? new Date(input.arrivedAt) : null,
@@ -595,7 +617,11 @@ async function createDelivery(
     await app.db.insert(deliveryItems).values(
       input.items.map((i) => ({
         deliveryId: created.id,
-        materialId: i.materialId ?? null,
+        itemKind: i.itemKind,
+        materialId: i.itemKind === 'asset' ? null : (i.materialId ?? null),
+        assetId: i.itemKind === 'asset' ? (i.assetId ?? null) : null,
+        inventoryNumber: i.inventoryNumber ?? null,
+        serialNumber: i.serialNumber ?? null,
         nameRaw: i.nameRaw,
         qtyPlanned: i.qtyPlanned ?? null,
         qtyActual: i.qtyActual ?? null,
@@ -654,6 +680,7 @@ async function updateDelivery(
       siteId: input.siteId,
       supplierId: input.supplierId ?? null,
       contractorId: input.contractorId ?? null,
+      recipientMolId: input.recipientMolId ?? null,
       vehiclePlate: input.vehiclePlate ?? null,
       driverName: input.driverName ?? null,
       arrivedAt: input.arrivedAt ? new Date(input.arrivedAt) : null,
@@ -671,7 +698,11 @@ async function updateDelivery(
     await app.db.insert(deliveryItems).values(
       input.items.map((i) => ({
         deliveryId: id,
-        materialId: i.materialId ?? null,
+        itemKind: i.itemKind,
+        materialId: i.itemKind === 'asset' ? null : (i.materialId ?? null),
+        assetId: i.itemKind === 'asset' ? (i.assetId ?? null) : null,
+        inventoryNumber: i.inventoryNumber ?? null,
+        serialNumber: i.serialNumber ?? null,
         nameRaw: i.nameRaw,
         qtyPlanned: i.qtyPlanned ?? null,
         qtyActual: i.qtyActual ?? null,

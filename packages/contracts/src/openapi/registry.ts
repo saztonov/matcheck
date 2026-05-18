@@ -68,6 +68,12 @@ import {
   CounterpartyListResponseSchema,
 } from '../counterparties.js';
 import { MaterialSchema, MaterialListResponseSchema } from '../materials.js';
+import {
+  ResponsiblePersonSchema,
+  ResponsiblePersonListResponseSchema,
+  ResponsiblePersonUpsertSchema,
+} from '../responsible-persons.js';
+import { AssetSchema, AssetListResponseSchema, AssetUpsertSchema } from '../assets.js';
 import { SiteSchema } from '../sites.js';
 import {
   StatusSchema,
@@ -154,6 +160,20 @@ const CounterpartyListResponse = registry.register(
 const Material = registry.register('Material', MaterialSchema);
 const MaterialListResponse = registry.register('MaterialListResponse', MaterialListResponseSchema);
 
+const ResponsiblePerson = registry.register('ResponsiblePerson', ResponsiblePersonSchema);
+const ResponsiblePersonUpsert = registry.register(
+  'ResponsiblePersonUpsert',
+  ResponsiblePersonUpsertSchema,
+);
+const ResponsiblePersonListResponse = registry.register(
+  'ResponsiblePersonListResponse',
+  ResponsiblePersonListResponseSchema,
+);
+
+const Asset = registry.register('Asset', AssetSchema);
+const AssetUpsert = registry.register('AssetUpsert', AssetUpsertSchema);
+const AssetListResponse = registry.register('AssetListResponse', AssetListResponseSchema);
+
 const Site = registry.register('Site', SiteSchema);
 
 const SyncDeletedIds = registry.register('SyncDeletedIds', SyncDeletedIdsSchema);
@@ -179,6 +199,10 @@ void SourceAttachment;
 void PhotoKind;
 void Counterparty;
 void Material;
+void ResponsiblePerson;
+void ResponsiblePersonUpsert;
+void Asset;
+void AssetUpsert;
 void Site;
 void SourceDocument;
 void SyncDeletedIds;
@@ -614,6 +638,59 @@ registry.registerPath({
     200: {
       description: 'Список материалов',
       content: { 'application/json': { schema: MaterialListResponse } },
+    },
+    401: errorRefs[401],
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/responsible-persons',
+  tags: ['References'],
+  summary: 'Справочник МОЛ (материально-ответственных лиц)',
+  description:
+    'Руководители собственных бригад — получатели материалов и ОС параллельно подрядчикам. ' +
+    'Не путать с пользователями системы (deliveries.confirmedByMolUserId).',
+  security: bearer,
+  request: {
+    query: z.object({
+      q: z.string().optional().openapi({ description: 'Поиск по ФИО' }),
+      activeOnly: z.coerce.boolean().optional(),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+      offset: z.coerce.number().int().min(0).optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Список МОЛ',
+      content: { 'application/json': { schema: ResponsiblePersonListResponse } },
+    },
+    401: errorRefs[401],
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/assets',
+  tags: ['References'],
+  summary: 'Справочник ОС (основных средств)',
+  description:
+    'Оборудование, инструмент, техника. Используется в позициях документов как item_kind="asset" ' +
+    '(параллельно материалам). Конкретный экземпляр в строке документа уточняется через ' +
+    'inventory_number / serial_number.',
+  security: bearer,
+  request: {
+    query: z.object({
+      q: z.string().optional().openapi({ description: 'Поиск по названию или коду' }),
+      activeOnly: z.coerce.boolean().optional(),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+      offset: z.coerce.number().int().min(0).optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Список ОС',
+      content: { 'application/json': { schema: AssetListResponse } },
     },
     401: errorRefs[401],
   },

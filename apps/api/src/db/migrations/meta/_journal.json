@@ -190,6 +190,48 @@
       "when": 1780876860000,
       "tag": "0026_photo_uploaded_at",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1780876920000,
+      "tag": "0027_responsible_persons",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780876980000,
+      "tag": "0028_assets",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780877040000,
+      "tag": "0029_items_asset_kind",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780877100000,
+      "tag": "0030_shipments_deliveries_mol_receiver",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780877160000,
+      "tag": "0031_deliveries_source_shipment",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780877220000,
+      "tag": "0032_entity_deletions_extend_types",
+      "breakpoints": true
     }
   ]
 }

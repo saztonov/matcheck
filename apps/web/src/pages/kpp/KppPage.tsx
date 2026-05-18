@@ -31,6 +31,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Counterparty,
+  ResponsiblePerson,
   Delivery,
   DeliveryPhoto,
   DeliveryStatusCode,
@@ -72,6 +73,11 @@ type DraftItem = {
   qtyActual: string | null;
   unit: string;
   materialId: string | null;
+  // Поддержка ОС в позициях; стикер AssetTag отображается при itemKind='asset'.
+  itemKind: 'material' | 'asset';
+  assetId: string | null;
+  inventoryNumber: string | null;
+  serialNumber: string | null;
   volumeM3: string | null;
   massKg: string | null;
   volumeConfidence: 'low' | 'medium' | 'high' | null;
@@ -121,7 +127,11 @@ export default function KppPage() {
   const [plate, setPlate] = useState('');
   const [comment, setComment] = useState('');
   const [siteId, setSiteId] = useState<string | null>(inspectorSiteId);
+  // Получатель приёмки: подрядчик ИЛИ МОЛ собственной бригады. CHECK на сервере
+  // не позволяет заполнить оба одновременно. Переключатель — Segmented в карточке.
+  const [recipientKind, setRecipientKind] = useState<'counterparty' | 'mol'>('counterparty');
   const [contractorId, setContractorId] = useState<string | null>(null);
+  const [recipientMolId, setRecipientMolId] = useState<string | null>(null);
   const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -138,7 +148,9 @@ export default function KppPage() {
       setPlate('');
       setComment('');
       setSiteId(inspectorSiteId);
+      setRecipientKind('counterparty');
       setContractorId(null);
+      setRecipientMolId(null);
       setSelectedUpd(null);
       hydratedIdRef.current = null;
     }
@@ -156,9 +168,17 @@ export default function KppPage() {
         '/counterparties?limit=500&role=contractor',
       ),
   });
+  const responsiblePersonsQuery = useQuery({
+    queryKey: ['responsible-persons', 'active'],
+    queryFn: () =>
+      api.get<{ items: ResponsiblePerson[]; total: number }>(
+        '/responsible-persons?activeOnly=true&limit=500',
+      ),
+  });
 
   const sites = sitesQuery.data?.items ?? [];
   const counterparties = counterpartiesQuery.data?.items ?? [];
+  const responsiblePersons = responsiblePersonsQuery.data?.items ?? [];
 
   const deliveryQuery = useQuery({
     queryKey: ['deliveries', deliveryId],
@@ -226,7 +246,17 @@ export default function KppPage() {
       } else {
         setSiteId((prev) => prev ?? (d.siteId === SYSTEM_SITE_ID ? null : d.siteId));
       }
-      setContractorId((prev) => prev ?? d.contractorId ?? null);
+      // Восстановление получателя: если в БД заполнен recipientMolId — это МОЛ,
+      // иначе counterparty (даже если contractorId = null).
+      if (d.recipientMolId) {
+        setRecipientKind('mol');
+        setRecipientMolId((prev) => prev ?? d.recipientMolId);
+        setContractorId(null);
+      } else {
+        setRecipientKind('counterparty');
+        setContractorId((prev) => prev ?? d.contractorId ?? null);
+        setRecipientMolId(null);
+      }
       setItems(
         d.items.map((it, idx) => ({
           clientKey: newKey(),
@@ -236,6 +266,10 @@ export default function KppPage() {
           qtyActual: it.qtyActual,
           unit: it.unit,
           materialId: it.materialId,
+          itemKind: it.itemKind,
+          assetId: it.assetId,
+          inventoryNumber: it.inventoryNumber,
+          serialNumber: it.serialNumber,
           volumeM3: it.volumeM3 ?? null,
           massKg: it.massKg ?? null,
           volumeConfidence: it.volumeConfidence ?? null,
@@ -321,7 +355,11 @@ export default function KppPage() {
         sourceDocumentIds: [upd.id],
         items: detail.items.map((it, i) => ({
           id: crypto.randomUUID(),
+          itemKind: 'material' as const,
           materialId: it.materialId ?? null,
+          assetId: null,
+          inventoryNumber: null,
+          serialNumber: null,
           nameRaw: it.nameRaw,
           qtyPlanned: it.qty,
           qtyActual: it.qty,
@@ -389,6 +427,10 @@ export default function KppPage() {
         qtyActual: null,
         unit: 'шт',
         materialId: null,
+        itemKind: 'material',
+        assetId: null,
+        inventoryNumber: null,
+        serialNumber: null,
         volumeM3: null,
         massKg: null,
         volumeConfidence: null,
@@ -404,7 +446,8 @@ export default function KppPage() {
       status: nextStatus,
       siteId: siteId ?? loadedDelivery.siteId,
       supplierId: selectedUpd?.supplierId ?? loadedDelivery.supplierId ?? null,
-      contractorId,
+      contractorId: recipientKind === 'counterparty' ? contractorId : null,
+      recipientMolId: recipientKind === 'mol' ? recipientMolId : null,
       vehiclePlate: plate || null,
       arrivedAt: loadedDelivery.arrivedAt ?? new Date().toISOString(),
       comment: comment || null,
@@ -415,7 +458,11 @@ export default function KppPage() {
         .filter((i) => i.nameRaw.trim().length > 0)
         .map((i) => ({
           id: crypto.randomUUID(),
-          materialId: i.materialId,
+          itemKind: i.itemKind,
+          materialId: i.itemKind === 'asset' ? null : i.materialId,
+          assetId: i.itemKind === 'asset' ? i.assetId : null,
+          inventoryNumber: i.inventoryNumber,
+          serialNumber: i.serialNumber,
           nameRaw: i.nameRaw,
           qtyPlanned: i.qtyPlanned,
           qtyActual: i.qtyActual,
@@ -767,27 +814,65 @@ export default function KppPage() {
             </Card>
           </Col>
           <Col xs={24} sm={12} md={6}>
-            <Card size="small" title="Подрядчик" styles={{ body: { padding: 12 } }}>
-              <Select<string>
-                size="large"
-                style={{ width: '100%' }}
-                placeholder="— не указан —"
-                value={contractorId ?? undefined}
-                onChange={(v) => setContractorId(v ?? null)}
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                loading={counterpartiesQuery.isLoading}
-                options={counterparties.map((c) => ({
-                  value: c.id,
-                  label: c.name,
-                }))}
-                notFoundContent={
-                  <Typography.Text type="secondary">
-                    Нет контрагентов с ролью «Подрядчик» — отметьте их в Справочниках
-                  </Typography.Text>
-                }
+            <Card size="small" title="Получатель" styles={{ body: { padding: 12 } }}>
+              <Segmented
+                block
+                style={{ marginBottom: 8 }}
+                options={[
+                  { label: 'Подрядчик', value: 'counterparty' },
+                  { label: 'МОЛ', value: 'mol' },
+                ]}
+                value={recipientKind}
+                onChange={(v) => {
+                  const next = v as 'counterparty' | 'mol';
+                  setRecipientKind(next);
+                  if (next === 'counterparty') setRecipientMolId(null);
+                  else setContractorId(null);
+                }}
               />
+              {recipientKind === 'counterparty' ? (
+                <Select<string>
+                  size="large"
+                  style={{ width: '100%' }}
+                  placeholder="— не указан —"
+                  value={contractorId ?? undefined}
+                  onChange={(v) => setContractorId(v ?? null)}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  loading={counterpartiesQuery.isLoading}
+                  options={counterparties.map((c) => ({
+                    value: c.id,
+                    label: c.name,
+                  }))}
+                  notFoundContent={
+                    <Typography.Text type="secondary">
+                      Нет контрагентов с ролью «Подрядчик» — отметьте их в Справочниках
+                    </Typography.Text>
+                  }
+                />
+              ) : (
+                <Select<string>
+                  size="large"
+                  style={{ width: '100%' }}
+                  placeholder="— не указан —"
+                  value={recipientMolId ?? undefined}
+                  onChange={(v) => setRecipientMolId(v ?? null)}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  loading={responsiblePersonsQuery.isLoading}
+                  options={responsiblePersons.map((m) => ({
+                    value: m.id,
+                    label: m.fullName,
+                  }))}
+                  notFoundContent={
+                    <Typography.Text type="secondary">
+                      Заведите МОЛ в Справочниках
+                    </Typography.Text>
+                  }
+                />
+              )}
             </Card>
           </Col>
           <Col xs={24} sm={12} md={6}>
@@ -802,18 +887,40 @@ export default function KppPage() {
             </Card>
           </Col>
           <Col xs={24} sm={12} md={6}>
-            <Card size="small" title="УПД" styles={{ body: { padding: 12 } }}>
-              {selectedUpd ? (
-                <Space wrap>
-                  <Tag color="blue">{selectedUpd.docNumber ?? '— без номера —'}</Tag>
-                  <Typography.Text type="secondary">
-                    {selectedUpd.docDate ?? '—'} · {selectedUpd.totalSum ?? '—'} ₽
+            {loadedDelivery?.sourceShipmentId ? (
+              // Парная приёмка из transfer — вместо УПД показываем источник и
+              // обе фактические даты. Дата прибытия заполнится, как только
+              // инспектор destSite подтвердит приёмку.
+              <Card size="small" title="Перемещение" styles={{ body: { padding: 12 } }}>
+                <Space direction="vertical" size={2}>
+                  <Space wrap>
+                    <Tag color="geekblue">с объекта</Tag>
+                    <Typography.Text strong>
+                      {loadedDelivery.sourceShipmentSiteCode ?? '—'}
+                    </Typography.Text>
+                  </Space>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Отгружено: {formatMolDate(loadedDelivery.sourceShipmentShippedAt)}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Принято: {formatMolDate(loadedDelivery.arrivedAt)}
                   </Typography.Text>
                 </Space>
-              ) : (
-                <Typography.Text type="secondary">— без УПД —</Typography.Text>
-              )}
-            </Card>
+              </Card>
+            ) : (
+              <Card size="small" title="УПД" styles={{ body: { padding: 12 } }}>
+                {selectedUpd ? (
+                  <Space wrap>
+                    <Tag color="blue">{selectedUpd.docNumber ?? '— без номера —'}</Tag>
+                    <Typography.Text type="secondary">
+                      {selectedUpd.docDate ?? '—'} · {selectedUpd.totalSum ?? '—'} ₽
+                    </Typography.Text>
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary">— без УПД —</Typography.Text>
+                )}
+              </Card>
+            )}
           </Col>
         </Row>
 

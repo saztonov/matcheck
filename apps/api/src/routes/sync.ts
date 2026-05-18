@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { asZod } from '../lib/fastify.js';
 import { SyncDeltaResponseSchema } from '@matcheck/contracts';
 import {
+  assets,
   counterparties,
   deliveries,
   deliveryItems,
@@ -11,6 +12,7 @@ import {
   deliverySources,
   entityDeletions,
   materials,
+  responsiblePersons,
   shipments,
   shipmentItems,
   shipmentPhotos,
@@ -60,12 +62,20 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           serverNow: now,
           counterparties: [],
           materials: [],
+          responsiblePersons: [],
+          assets: [],
           sites: [],
           statuses: [],
           sourceDocuments: [],
           deliveries: [],
           shipments: [],
-          deletedIds: { deliveries: [], shipments: [], sourceDocuments: [] },
+          deletedIds: {
+            deliveries: [],
+            shipments: [],
+            sourceDocuments: [],
+            responsiblePersons: [],
+            assets: [],
+          },
         };
       }
 
@@ -148,6 +158,37 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
         .limit(500);
       const dRows = dRowsJoined.map((r) => ({ ...r.d, _status: r.s, _molEmail: r.molEmail }));
       const dIds = dRows.map((r) => r.id);
+
+      // Для парных приёмок (transfer) подтягиваем плоско дату отгрузки и
+      // объект-источник из связанного shipment + sites — это то, что показывает
+      // KppPage в шапке вместо «УПД №…».
+      const srcShipmentIds = dRows
+        .map((d) => d.sourceShipmentId)
+        .filter((id): id is string => id !== null);
+      const srcShipmentRows = srcShipmentIds.length
+        ? await app.db
+            .select({
+              id: shipments.id,
+              shippedAt: shipments.shippedAt,
+              siteId: shipments.siteId,
+              siteCode: sites.code,
+            })
+            .from(shipments)
+            .leftJoin(sites, eq(shipments.siteId, sites.id))
+            .where(sql_in(shipments.id, srcShipmentIds))
+        : [];
+      const srcShipmentById = new Map<
+        string,
+        { shippedAt: Date | null; siteId: string; siteCode: string | null }
+      >();
+      for (const r of srcShipmentRows) {
+        srcShipmentById.set(r.id, {
+          shippedAt: r.shippedAt,
+          siteId: r.siteId,
+          siteCode: r.siteCode,
+        });
+      }
+
       const dItems = dIds.length
         ? await app.db.select().from(deliveryItems).where(sql_in(deliveryItems.deliveryId, dIds))
         : [];
@@ -195,12 +236,17 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
       // ── deletedIds (журнал hard-delete для офлайн-клиента) ──
       // Возвращаем только при дельта-sync (since != null) — на initial-sync
       // клиент стартует с нуля, история удалений не нужна. Для inspector_kpp
-      // фильтр по siteId (записи без siteId — например, до 0024 — не отдаём).
+      // фильтр по siteId работает только для документов с siteId. Глобальные
+      // справочники (МОЛ/ОС) удаляются без siteId — их клиент видит независимо
+      // от роли.
       const deletedDeliveryIds: string[] = [];
       const deletedShipmentIds: string[] = [];
       const deletedSourceDocumentIds: string[] = [];
+      const deletedResponsiblePersonIds: string[] = [];
+      const deletedAssetIds: string[] = [];
       if (since) {
-        const delRows = await app.db
+        // 1) Site-scoped удаления (deliveries/shipments/source_documents).
+        const siteScoped = await app.db
           .select({ entityType: entityDeletions.entityType, entityId: entityDeletions.entityId })
           .from(entityDeletions)
           .where(
@@ -212,13 +258,43 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
                 )
               : gte(entityDeletions.deletedAt, since),
           );
-        for (const r of delRows) {
+        for (const r of siteScoped) {
           if (r.entityType === 'delivery') deletedDeliveryIds.push(r.entityId);
           else if (r.entityType === 'shipment') deletedShipmentIds.push(r.entityId);
           else if (r.entityType === 'source_document')
             deletedSourceDocumentIds.push(r.entityId);
         }
+        // 2) Глобальные справочники (siteId IS NULL) — независимо от роли.
+        const globalDel = await app.db
+          .select({ entityType: entityDeletions.entityType, entityId: entityDeletions.entityId })
+          .from(entityDeletions)
+          .where(
+            drAnd(
+              drSql`${entityDeletions.siteId} is null`,
+              gte(entityDeletions.deletedAt, since),
+            ),
+          );
+        for (const r of globalDel) {
+          if (r.entityType === 'responsible_person')
+            deletedResponsiblePersonIds.push(r.entityId);
+          else if (r.entityType === 'asset') deletedAssetIds.push(r.entityId);
+        }
       }
+
+      // Справочники МОЛ/ОС — дельта по updatedAt; для initial-sync (since=null)
+      // отдаём все записи.
+      const respPersonRows = await app.db
+        .select()
+        .from(responsiblePersons)
+        .where(since ? gte(responsiblePersons.updatedAt, since) : undefined)
+        .orderBy(desc(responsiblePersons.updatedAt))
+        .limit(500);
+      const assetRows = await app.db
+        .select()
+        .from(assets)
+        .where(since ? gte(assets.updatedAt, since) : undefined)
+        .orderBy(desc(assets.updatedAt))
+        .limit(500);
 
       return {
         cursor: new Date().toISOString(),
@@ -227,6 +303,8 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           deliveries: deletedDeliveryIds,
           shipments: deletedShipmentIds,
           sourceDocuments: deletedSourceDocumentIds,
+          responsiblePersons: deletedResponsiblePersonIds,
+          assets: deletedAssetIds,
         },
         counterparties: cpRows.map((c) => ({
           id: c.id,
@@ -248,6 +326,24 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           unit: m.unit,
           createdAt: m.createdAt.toISOString(),
           updatedAt: m.updatedAt.toISOString(),
+        })),
+        responsiblePersons: respPersonRows.map((r) => ({
+          id: r.id,
+          fullName: r.fullName,
+          phone: r.phone,
+          position: r.position,
+          isActive: r.isActive,
+          createdAt: r.createdAt.toISOString(),
+          updatedAt: r.updatedAt.toISOString(),
+        })),
+        assets: assetRows.map((a) => ({
+          id: a.id,
+          code: a.code,
+          name: a.name,
+          unit: a.unit,
+          isActive: a.isActive,
+          createdAt: a.createdAt.toISOString(),
+          updatedAt: a.updatedAt.toISOString(),
         })),
         sites: siteRows.map((s) => ({
           id: s.id,
@@ -345,6 +441,7 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           siteId: d.siteId,
           supplierId: d.supplierId,
           contractorId: d.contractorId,
+          recipientMolId: d.recipientMolId,
           vehiclePlate: d.vehiclePlate,
           driverName: d.driverName,
           arrivedAt: d.arrivedAt?.toISOString() ?? null,
@@ -363,11 +460,23 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           sourceDocumentIds: dSources
             .filter((s) => s.deliveryId === d.id)
             .map((s) => s.sourceDocumentId),
+          sourceShipmentId: d.sourceShipmentId,
+          sourceShipmentShippedAt:
+            (d.sourceShipmentId ? srcShipmentById.get(d.sourceShipmentId)?.shippedAt : null)?.toISOString() ??
+            null,
+          sourceShipmentSiteId:
+            (d.sourceShipmentId ? srcShipmentById.get(d.sourceShipmentId)?.siteId : null) ?? null,
+          sourceShipmentSiteCode:
+            (d.sourceShipmentId ? srcShipmentById.get(d.sourceShipmentId)?.siteCode : null) ?? null,
           items: dItems
             .filter((i) => i.deliveryId === d.id)
             .map((i) => ({
               id: i.id,
+              itemKind: i.itemKind,
               materialId: i.materialId,
+              assetId: i.assetId,
+              inventoryNumber: i.inventoryNumber,
+              serialNumber: i.serialNumber,
               nameRaw: i.nameRaw,
               qtyPlanned: i.qtyPlanned,
               qtyActual: i.qtyActual,
@@ -406,6 +515,7 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           kind: s.kind,
           siteId: s.siteId,
           receiverCounterpartyId: s.receiverCounterpartyId,
+          receiverMolId: s.receiverMolId,
           destSiteId: s.destSiteId,
           vehiclePlate: s.vehiclePlate,
           driverName: s.driverName,
@@ -427,7 +537,11 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
             .filter((i) => i.shipmentId === s.id)
             .map((i) => ({
               id: i.id,
+              itemKind: i.itemKind,
               materialId: i.materialId,
+              assetId: i.assetId,
+              inventoryNumber: i.inventoryNumber,
+              serialNumber: i.serialNumber,
               nameRaw: i.nameRaw,
               qtyPlanned: i.qtyPlanned,
               qtyActual: i.qtyActual,

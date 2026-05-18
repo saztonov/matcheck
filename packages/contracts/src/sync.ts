@@ -4,6 +4,8 @@ import { ShipmentSchema } from './shipments.js';
 import { SourceDocumentDetailSchema } from './source-documents.js';
 import { CounterpartySchema } from './counterparties.js';
 import { MaterialSchema } from './materials.js';
+import { ResponsiblePersonSchema } from './responsible-persons.js';
+import { AssetSchema } from './assets.js';
 import { SiteSchema } from './sites.js';
 import { StatusSchema } from './statuses.js';
 
@@ -14,6 +16,8 @@ export const SyncDeletedIdsSchema = z.object({
   deliveries: z.array(z.string().uuid()),
   shipments: z.array(z.string().uuid()),
   sourceDocuments: z.array(z.string().uuid()),
+  responsiblePersons: z.array(z.string().uuid()),
+  assets: z.array(z.string().uuid()),
 });
 export type SyncDeletedIds = z.infer<typeof SyncDeletedIdsSchema>;
 
@@ -24,6 +28,8 @@ export const SyncDeltaResponseSchema = z.object({
   sourceDocuments: z.array(SourceDocumentDetailSchema),
   counterparties: z.array(CounterpartySchema),
   materials: z.array(MaterialSchema),
+  responsiblePersons: z.array(ResponsiblePersonSchema),
+  assets: z.array(AssetSchema),
   sites: z.array(SiteSchema),
   // Лейблы и цвета статусов (entity_type='delivery'|'shipment'|…) — клиент
   // использует их вместо хардкода. Меняются редко, отдаются всегда без фильтра.
