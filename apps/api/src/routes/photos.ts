@@ -56,6 +56,7 @@ export async function photoRoutes(rawApp: FastifyInstance): Promise<void> {
           400: ErrorResponseSchema,
           403: ErrorResponseSchema,
           404: ErrorResponseSchema,
+          409: ErrorResponseSchema,
         },
       },
     },
@@ -71,13 +72,24 @@ export async function photoRoutes(rawApp: FastifyInstance): Promise<void> {
 
       if (operationKind === 'delivery') {
         const [d] = await app.db
-          .select({ id: deliveries.id, inspectorId: deliveries.inspectorId })
+          .select({
+            id: deliveries.id,
+            inspectorId: deliveries.inspectorId,
+            pendingDeletionAt: deliveries.pendingDeletionAt,
+          })
           .from(deliveries)
           .where(eq(deliveries.id, operationId))
           .limit(1);
         if (!d) return reply.code(404).send({ error: 'delivery_not_found' });
         if (req.user?.role === 'inspector_kpp' && d.inspectorId !== req.user.id) {
           return reply.code(403).send({ error: 'forbidden' });
+        }
+        // Помеченный на удаление документ — read-only.
+        if (d.pendingDeletionAt !== null) {
+          return reply.code(409).send({
+            error: 'pending_deletion',
+            message: 'Документ помечен на удаление — мутации фото запрещены',
+          });
         }
 
         const [existing] = await app.db
@@ -147,13 +159,23 @@ export async function photoRoutes(rawApp: FastifyInstance): Promise<void> {
 
       // operationKind === 'shipment'
       const [s] = await app.db
-        .select({ id: shipments.id, inspectorId: shipments.inspectorId })
+        .select({
+          id: shipments.id,
+          inspectorId: shipments.inspectorId,
+          pendingDeletionAt: shipments.pendingDeletionAt,
+        })
         .from(shipments)
         .where(eq(shipments.id, operationId))
         .limit(1);
       if (!s) return reply.code(404).send({ error: 'shipment_not_found' });
       if (req.user?.role === 'inspector_kpp' && s.inspectorId !== req.user.id) {
         return reply.code(403).send({ error: 'forbidden' });
+      }
+      if (s.pendingDeletionAt !== null) {
+        return reply.code(409).send({
+          error: 'pending_deletion',
+          message: 'Документ помечен на удаление — мутации фото запрещены',
+        });
       }
 
       const [existing] = await app.db
@@ -260,6 +282,7 @@ export async function photoRoutes(rawApp: FastifyInstance): Promise<void> {
         response: {
           200: PhotoDeleteResponseSchema,
           404: ErrorResponseSchema,
+          409: ErrorResponseSchema,
         },
       },
     },
@@ -267,9 +290,32 @@ export async function photoRoutes(rawApp: FastifyInstance): Promise<void> {
       const found = await findPhoto(app, req.params.id);
       if (!found) return reply.code(404).send({ error: 'not_found' });
 
+      // Помеченный документ — read-only; удаление целиком идёт через DELETE /deliveries|shipments/:id.
       if (found.kind === 'delivery') {
+        const [parent] = await app.db
+          .select({ pendingDeletionAt: deliveries.pendingDeletionAt })
+          .from(deliveries)
+          .where(eq(deliveries.id, found.operationId))
+          .limit(1);
+        if (parent?.pendingDeletionAt !== null && parent?.pendingDeletionAt !== undefined) {
+          return reply.code(409).send({
+            error: 'pending_deletion',
+            message: 'Документ помечен на удаление — мутации фото запрещены',
+          });
+        }
         await app.db.delete(deliveryPhotos).where(eq(deliveryPhotos.id, req.params.id));
       } else {
+        const [parent] = await app.db
+          .select({ pendingDeletionAt: shipments.pendingDeletionAt })
+          .from(shipments)
+          .where(eq(shipments.id, found.operationId))
+          .limit(1);
+        if (parent?.pendingDeletionAt !== null && parent?.pendingDeletionAt !== undefined) {
+          return reply.code(409).send({
+            error: 'pending_deletion',
+            message: 'Документ помечен на удаление — мутации фото запрещены',
+          });
+        }
         await app.db.delete(shipmentPhotos).where(eq(shipmentPhotos.id, req.params.id));
       }
       await deleteObject(found.s3Key).catch((err) =>

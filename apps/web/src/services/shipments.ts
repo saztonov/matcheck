@@ -6,6 +6,7 @@ import type {
   ShipmentUpsert,
   Status,
 } from '@matcheck/contracts';
+import { api } from './api';
 
 const PLACEHOLDER_NOT_FILLED: Status = {
   id: '',
@@ -110,6 +111,19 @@ export async function enqueueMutation(
 ): Promise<void> {
   const d = await db();
   await d.put('mutations', { ...m, attempts: 0, createdAt: Date.now() });
+}
+
+// Soft-delete операции — см. одноимённые функции в services/deliveries.ts.
+export function markDeletion(id: string, reason: string | null = null): Promise<Shipment> {
+  return api.post<Shipment>(`/shipments/${id}/mark-deletion`, { reason });
+}
+
+export function unmarkDeletion(id: string): Promise<Shipment> {
+  return api.post<Shipment>(`/shipments/${id}/unmark-deletion`);
+}
+
+export function hardDeleteShipment(id: string): Promise<{ ok: true }> {
+  return api.delete<{ ok: true }>(`/shipments/${id}`);
 }
 
 export function buildUpsertPayload(r: ShipmentRecord): ShipmentUpsert {

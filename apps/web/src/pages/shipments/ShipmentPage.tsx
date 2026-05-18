@@ -25,6 +25,7 @@ import {
   CameraOutlined,
   DeleteOutlined,
   PlusOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -46,8 +47,12 @@ import {
   effectiveState,
   enqueueMutation,
   getShipment,
+  hardDeleteShipment,
+  markDeletion as markShipmentDeletion,
+  unmarkDeletion as unmarkShipmentDeletion,
   upsertServerSnapshot,
 } from '../../services/shipments';
+import { PendingDeletionTag } from '../../shared/ui/PendingDeletionTag';
 import { runSync } from '../../services/sync';
 import { db, SYSTEM_SITE_ID } from '../../lib/db';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
@@ -442,6 +447,48 @@ export default function ShipmentPage() {
     onError: (err: Error) => message.error(err.message),
   });
 
+  const markDel = useMutation({
+    mutationFn: async (reason: string | null) => {
+      if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+      return markShipmentDeletion(loadedShipment.id, reason);
+    },
+    onSuccess: () => {
+      message.success('Помечено на удаление');
+      void queryClient.invalidateQueries({ queryKey: ['shipments', shipmentId] });
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const unmarkDel = useMutation({
+    mutationFn: async () => {
+      if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+      return unmarkShipmentDeletion(loadedShipment.id);
+    },
+    onSuccess: () => {
+      message.success('Пометка снята');
+      void queryClient.invalidateQueries({ queryKey: ['shipments', shipmentId] });
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const hardDel = useMutation({
+    mutationFn: async () => {
+      if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+      return hardDeleteShipment(loadedShipment.id);
+    },
+    onSuccess: () => {
+      message.success('Отгрузка удалена');
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+      void queryClient.invalidateQueries({ queryKey: ['source-documents'] });
+      navigate('/shipments?trash=1');
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const [markReason, setMarkReason] = useState('');
+
   // Мерджим серверные photos и локальные IDB-записи по id, чтобы превью
   // свежеснятого фото не пропадало между моментами IDB-put и pullSync.
   const mergedPhotos: ShipmentPhoto[] = useMemo(() => {
@@ -594,6 +641,11 @@ export default function ShipmentPage() {
   // ─── Режим формы ─────────────────────────────────────────────────────────
   if (shipmentId) {
     void trimQty;
+    const pendingAt = loadedShipment?.pendingDeletionAt ?? null;
+    const isPending = pendingAt !== null;
+    const isAdmin = authUser?.role === 'admin';
+    const canUnmark =
+      isAdmin || authUser?.id === (loadedShipment?.pendingDeletionByUserId ?? null);
     return (
       <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: isDesktop ? 0 : 96 }}>
         <Space style={{ width: '100%' }} align="center">
@@ -607,7 +659,62 @@ export default function ShipmentPage() {
           <Typography.Title level={3} style={{ margin: 0 }}>
             Отгрузка
           </Typography.Title>
+          {isPending && loadedShipment && (
+            <PendingDeletionTag
+              at={loadedShipment.pendingDeletionAt}
+              byEmail={loadedShipment.pendingDeletionByUserEmail}
+              reason={loadedShipment.pendingDeletionReason}
+            />
+          )}
         </Space>
+
+        {isPending && loadedShipment && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Документ помечен на удаление"
+            description={
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Typography.Text>
+                  Пометил: {loadedShipment.pendingDeletionByUserEmail ?? '—'} ·{' '}
+                  {loadedShipment.pendingDeletionAt
+                    ? new Date(loadedShipment.pendingDeletionAt).toLocaleString('ru-RU')
+                    : '—'}
+                </Typography.Text>
+                {loadedShipment.pendingDeletionReason && (
+                  <Typography.Text type="secondary">
+                    Причина: {loadedShipment.pendingDeletionReason}
+                  </Typography.Text>
+                )}
+                <Space wrap>
+                  {canUnmark && (
+                    <Button
+                      icon={<UndoOutlined />}
+                      loading={unmarkDel.isPending}
+                      onClick={() => unmarkDel.mutate()}
+                    >
+                      Восстановить
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Popconfirm
+                      title="Удалить навсегда?"
+                      description="Запись, фото и связи с документами будут стёрты."
+                      okText="Да, удалить"
+                      cancelText="Нет"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => hardDel.mutate()}
+                    >
+                      <Button danger icon={<DeleteOutlined />} loading={hardDel.isPending}>
+                        Удалить навсегда
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </Space>
+              </Space>
+            }
+          />
+        )}
 
         <Card size="small" title="Вид отгрузки" styles={{ body: { padding: 12 } }}>
           <Segmented
@@ -809,8 +916,38 @@ export default function ShipmentPage() {
           const confirmTooltip = isConfirmed
             ? `Подтверждено: ${loadedShipment.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedShipment.confirmedByMolAt)}`
             : (verifyReason ?? 'Подтвердить документ как МОЛ');
-          const saveDisabled = !!verifyReason;
-          const confirmDisabled = isConfirmed || !!verifyReason;
+          // Помеченный документ — read-only: блокируем Save и Подтвердить МОЛ.
+          const saveDisabled = !!verifyReason || isPending;
+          const confirmDisabled = isConfirmed || !!verifyReason || isPending;
+          const canMarkDeletion =
+            !isPending &&
+            (loadedShipment.status.code === 'shipped' ||
+              loadedShipment.status.code === 'confirmed_mol');
+          const markBlock = canMarkDeletion ? (
+            <Popconfirm
+              title="Пометить на удаление?"
+              description={
+                <Input.TextArea
+                  placeholder="Причина (необязательно)"
+                  rows={2}
+                  maxLength={500}
+                  value={markReason}
+                  onChange={(e) => setMarkReason(e.target.value)}
+                />
+              }
+              okText="Пометить"
+              cancelText="Нет"
+              onConfirm={() => {
+                const reason = markReason.trim() || null;
+                markDel.mutate(reason);
+                setMarkReason('');
+              }}
+            >
+              <Button danger icon={<DeleteOutlined />} loading={markDel.isPending}>
+                Пометить на удаление
+              </Button>
+            </Popconfirm>
+          ) : null;
           return isDesktop ? (
             <div
               style={{
@@ -826,6 +963,7 @@ export default function ShipmentPage() {
               }}
             >
               <Button onClick={() => navigate('/shipments')}>Отмена</Button>
+              {markBlock}
               <Tooltip title={verifyReason ?? ''} placement="top">
                 <span style={{ display: 'inline-flex' }}>
                   <Button
@@ -872,6 +1010,7 @@ export default function ShipmentPage() {
               >
                 Отмена
               </Button>
+              {markBlock && <span style={{ flex: 1, display: 'inline-flex' }}>{markBlock}</span>}
               <Tooltip title={verifyReason ?? ''} placement="top">
                 <span style={{ flex: 1, display: 'inline-flex' }}>
                   <Button

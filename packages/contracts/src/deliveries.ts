@@ -42,6 +42,10 @@ export const DeliverySchema = z.object({
   confirmedByMolUserId: z.string().uuid().nullable(),
   confirmedByMolUserEmail: z.string().nullable(),
   confirmedByMolAt: z.string().nullable(),
+  pendingDeletionAt: z.string().nullable(),
+  pendingDeletionByUserId: z.string().uuid().nullable(),
+  pendingDeletionByUserEmail: z.string().nullable(),
+  pendingDeletionReason: z.string().nullable(),
   version: z.number(),
   sourceDocumentIds: z.array(z.string().uuid()),
   items: z.array(DeliveryItemSchema),
@@ -50,6 +54,11 @@ export const DeliverySchema = z.object({
   updatedAt: z.string(),
 });
 export type Delivery = z.infer<typeof DeliverySchema>;
+
+export const DeliveryMarkDeletionSchema = z.object({
+  reason: z.string().max(500).nullable().optional(),
+});
+export type DeliveryMarkDeletion = z.infer<typeof DeliveryMarkDeletionSchema>;
 
 export const DeliveryUpsertItemSchema = z.object({
   id: z.string().uuid().optional(),

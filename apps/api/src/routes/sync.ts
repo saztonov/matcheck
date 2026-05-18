@@ -265,6 +265,12 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           confirmedByMolUserId: d.confirmedByMolUserId,
           confirmedByMolUserEmail: d._molEmail,
           confirmedByMolAt: d.confirmedByMolAt?.toISOString() ?? null,
+          // Soft-delete: email автора пометки в sync не подтягиваем (опциональный
+          // join усложнил бы запрос), офлайн-клиент покажет адрес как «—».
+          pendingDeletionAt: d.pendingDeletionAt?.toISOString() ?? null,
+          pendingDeletionByUserId: d.pendingDeletionByUserId,
+          pendingDeletionByUserEmail: null,
+          pendingDeletionReason: d.pendingDeletionReason,
           version: d.version,
           sourceDocumentIds: dSources
             .filter((s) => s.deliveryId === d.id)
@@ -320,6 +326,10 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           confirmedByMolUserId: s.confirmedByMolUserId,
           confirmedByMolUserEmail: s._molEmail,
           confirmedByMolAt: s.confirmedByMolAt?.toISOString() ?? null,
+          pendingDeletionAt: s.pendingDeletionAt?.toISOString() ?? null,
+          pendingDeletionByUserId: s.pendingDeletionByUserId,
+          pendingDeletionByUserEmail: null,
+          pendingDeletionReason: s.pendingDeletionReason,
           version: s.version,
           sourceDocumentIds: shSources
             .filter((x) => x.shipmentId === s.id)

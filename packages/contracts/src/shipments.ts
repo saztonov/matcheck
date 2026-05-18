@@ -46,6 +46,10 @@ export const ShipmentSchema = z.object({
   confirmedByMolUserId: z.string().uuid().nullable(),
   confirmedByMolUserEmail: z.string().nullable(),
   confirmedByMolAt: z.string().nullable(),
+  pendingDeletionAt: z.string().nullable(),
+  pendingDeletionByUserId: z.string().uuid().nullable(),
+  pendingDeletionByUserEmail: z.string().nullable(),
+  pendingDeletionReason: z.string().nullable(),
   version: z.number(),
   sourceDocumentIds: z.array(z.string().uuid()),
   items: z.array(ShipmentItemSchema),
@@ -54,6 +58,11 @@ export const ShipmentSchema = z.object({
   updatedAt: z.string(),
 });
 export type Shipment = z.infer<typeof ShipmentSchema>;
+
+export const ShipmentMarkDeletionSchema = z.object({
+  reason: z.string().max(500).nullable().optional(),
+});
+export type ShipmentMarkDeletion = z.infer<typeof ShipmentMarkDeletionSchema>;
 
 export const ShipmentUpsertItemSchema = z.object({
   id: z.string().uuid().optional(),

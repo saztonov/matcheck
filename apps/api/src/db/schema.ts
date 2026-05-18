@@ -489,6 +489,14 @@ export const deliveries = pgTable(
       onDelete: 'set null',
     }),
     confirmedByMolAt: timestamp('confirmed_by_mol_at', { withTimezone: true }),
+    // Soft-delete: пометка на удаление. Окончательно стирает только админ.
+    // Применимо к статусам filled/confirmed_mol; CHECK гарантирует, что три
+    // поля заполнены/пусты согласованно.
+    pendingDeletionAt: timestamp('pending_deletion_at', { withTimezone: true }),
+    pendingDeletionByUserId: uuid('pending_deletion_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    pendingDeletionReason: text('pending_deletion_reason'),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -498,6 +506,13 @@ export const deliveries = pgTable(
     index('deliveries_contractor_idx')
       .on(t.contractorId)
       .where(sql`${t.contractorId} is not null`),
+    index('deliveries_pending_deletion_idx')
+      .on(t.siteId, t.pendingDeletionAt)
+      .where(sql`${t.pendingDeletionAt} is not null`),
+    check(
+      'deliveries_pending_deletion_chk',
+      sql`(${t.pendingDeletionAt} is null and ${t.pendingDeletionByUserId} is null) or (${t.pendingDeletionAt} is not null and ${t.pendingDeletionByUserId} is not null)`,
+    ),
   ],
 );
 
@@ -586,6 +601,12 @@ export const shipments = pgTable(
       onDelete: 'set null',
     }),
     confirmedByMolAt: timestamp('confirmed_by_mol_at', { withTimezone: true }),
+    // Soft-delete: см. одноимённые поля в deliveries.
+    pendingDeletionAt: timestamp('pending_deletion_at', { withTimezone: true }),
+    pendingDeletionByUserId: uuid('pending_deletion_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    pendingDeletionReason: text('pending_deletion_reason'),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -600,6 +621,13 @@ export const shipments = pgTable(
     index('shipment_receiver_idx')
       .on(t.receiverCounterpartyId)
       .where(sql`${t.receiverCounterpartyId} is not null`),
+    index('shipments_pending_deletion_idx')
+      .on(t.siteId, t.pendingDeletionAt)
+      .where(sql`${t.pendingDeletionAt} is not null`),
+    check(
+      'shipments_pending_deletion_chk',
+      sql`(${t.pendingDeletionAt} is null and ${t.pendingDeletionByUserId} is null) or (${t.pendingDeletionAt} is not null and ${t.pendingDeletionByUserId} is not null)`,
+    ),
     check(
       'shipments_kind_links_chk',
       sql`(

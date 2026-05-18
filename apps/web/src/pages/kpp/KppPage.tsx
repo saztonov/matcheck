@@ -8,6 +8,7 @@ import {
   Collapse,
   Input,
   InputNumber,
+  Popconfirm,
   Row,
   Segmented,
   Select,
@@ -23,7 +24,9 @@ import type { TableProps, UploadProps } from 'antd';
 import {
   ArrowLeftOutlined,
   CameraOutlined,
+  DeleteOutlined,
   PlusOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
@@ -45,8 +48,12 @@ import {
   effectiveState,
   enqueueMutation,
   getDelivery,
+  hardDeleteDelivery,
+  markDeletion as markDeliveryDeletion,
+  unmarkDeletion as unmarkDeliveryDeletion,
   upsertServerSnapshot,
 } from '../../services/deliveries';
+import { PendingDeletionTag } from '../../shared/ui/PendingDeletionTag';
 import { runSync } from '../../services/sync';
 import { db } from '../../lib/db';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
@@ -466,6 +473,48 @@ export default function KppPage() {
     onError: (err: Error) => message.error(err.message),
   });
 
+  const markDel = useMutation({
+    mutationFn: async (reason: string | null) => {
+      if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
+      return markDeliveryDeletion(loadedDelivery.id, reason);
+    },
+    onSuccess: () => {
+      message.success('Помечено на удаление');
+      void queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] });
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const unmarkDel = useMutation({
+    mutationFn: async () => {
+      if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
+      return unmarkDeliveryDeletion(loadedDelivery.id);
+    },
+    onSuccess: () => {
+      message.success('Пометка снята');
+      void queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] });
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const hardDel = useMutation({
+    mutationFn: async () => {
+      if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
+      return hardDeleteDelivery(loadedDelivery.id);
+    },
+    onSuccess: () => {
+      message.success('Приёмка удалена');
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+      void queryClient.invalidateQueries({ queryKey: ['source-documents'] });
+      navigate('/kpp?tab=accepted&trash=1');
+    },
+    onError: (err: Error) => message.error(err.message),
+  });
+
+  const [markReason, setMarkReason] = useState('');
+
   // Мерджим серверные photos и локальные IDB-записи по id. Это покрывает оба сценария:
   // (а) черновик ещё не на сервере — фото есть только локально;
   // (б) фото только что снято и ещё не подтянуто очередным pullSync.
@@ -611,6 +660,11 @@ export default function KppPage() {
 
   // === Режим формы (открыта приёмка) ===
   if (deliveryId) {
+    const pendingAt = loadedDelivery?.pendingDeletionAt ?? null;
+    const isPending = pendingAt !== null;
+    const isAdmin = authUser?.role === 'admin';
+    const canUnmark =
+      isAdmin || authUser?.id === (loadedDelivery?.pendingDeletionByUserId ?? null);
     return (
       <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: isDesktop ? 0 : 96 }}>
         <Space style={{ width: '100%' }} align="center">
@@ -624,7 +678,60 @@ export default function KppPage() {
           <Typography.Title level={3} style={{ margin: 0 }}>
             Приёмка
           </Typography.Title>
+          {isPending && loadedDelivery && (
+            <PendingDeletionTag
+              at={loadedDelivery.pendingDeletionAt}
+              byEmail={loadedDelivery.pendingDeletionByUserEmail}
+              reason={loadedDelivery.pendingDeletionReason}
+            />
+          )}
         </Space>
+
+        {isPending && loadedDelivery && (
+          <Alert
+            type="warning"
+            showIcon
+            message="Документ помечен на удаление"
+            description={
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Typography.Text>
+                  Пометил: {loadedDelivery.pendingDeletionByUserEmail ?? '—'} ·{' '}
+                  {formatMolDate(loadedDelivery.pendingDeletionAt)}
+                </Typography.Text>
+                {loadedDelivery.pendingDeletionReason && (
+                  <Typography.Text type="secondary">
+                    Причина: {loadedDelivery.pendingDeletionReason}
+                  </Typography.Text>
+                )}
+                <Space wrap>
+                  {canUnmark && (
+                    <Button
+                      icon={<UndoOutlined />}
+                      loading={unmarkDel.isPending}
+                      onClick={() => unmarkDel.mutate()}
+                    >
+                      Восстановить
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <Popconfirm
+                      title="Удалить навсегда?"
+                      description="Запись, фото и связи с УПД будут стёрты. УПД вернётся в «Ожидаемые»."
+                      okText="Да, удалить"
+                      cancelText="Нет"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => hardDel.mutate()}
+                    >
+                      <Button danger icon={<DeleteOutlined />} loading={hardDel.isPending}>
+                        Удалить навсегда
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </Space>
+              </Space>
+            }
+          />
+        )}
 
         <Row gutter={[8, 8]}>
           <Col xs={24} sm={12} md={6}>
@@ -813,8 +920,39 @@ export default function KppPage() {
           const confirmTooltip = isConfirmed
             ? `Подтверждено: ${loadedDelivery.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedDelivery.confirmedByMolAt)}`
             : (verifyReason ?? 'Подтвердить документ как МОЛ');
-          const saveDisabled = !!verifyReason;
-          const confirmDisabled = isConfirmed || !!verifyReason;
+          // Помеченный документ — read-only: блокируем Save и Подтвердить МОЛ.
+          const saveDisabled = !!verifyReason || isPending;
+          const confirmDisabled = isConfirmed || !!verifyReason || isPending;
+          // Кнопка «Пометить на удаление» доступна для filled/confirmed_mol в активном режиме.
+          const canMarkDeletion =
+            !isPending &&
+            (loadedDelivery.status.code === 'filled' ||
+              loadedDelivery.status.code === 'confirmed_mol');
+          const markBlock = canMarkDeletion ? (
+            <Popconfirm
+              title="Пометить на удаление?"
+              description={
+                <Input.TextArea
+                  placeholder="Причина (необязательно)"
+                  rows={2}
+                  maxLength={500}
+                  value={markReason}
+                  onChange={(e) => setMarkReason(e.target.value)}
+                />
+              }
+              okText="Пометить"
+              cancelText="Нет"
+              onConfirm={() => {
+                const reason = markReason.trim() || null;
+                markDel.mutate(reason);
+                setMarkReason('');
+              }}
+            >
+              <Button danger icon={<DeleteOutlined />} loading={markDel.isPending}>
+                Пометить на удаление
+              </Button>
+            </Popconfirm>
+          ) : null;
           return isDesktop ? (
             <div
               style={{
@@ -832,6 +970,7 @@ export default function KppPage() {
               <Button onClick={() => navigate(fromAccepted ? '/kpp?tab=accepted' : '/kpp')}>
                 Отмена
               </Button>
+              {markBlock}
               <Tooltip title={verifyReason ?? ''} placement="top">
                 <span style={{ display: 'inline-flex' }}>
                   <Button
@@ -878,6 +1017,7 @@ export default function KppPage() {
               >
                 Отмена
               </Button>
+              {markBlock && <span style={{ flex: 1, display: 'inline-flex' }}>{markBlock}</span>}
               <Tooltip title={verifyReason ?? ''} placement="top">
                 <span style={{ flex: 1, display: 'inline-flex' }}>
                   <Button

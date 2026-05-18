@@ -6,6 +6,7 @@ import {
   Card,
   Input,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Tag,
@@ -13,7 +14,7 @@ import {
   Typography,
   message,
 } from 'antd';
-import { DeleteOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ExclamationCircleOutlined, UndoOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Counterparty,
@@ -25,8 +26,15 @@ import type {
 } from '@matcheck/contracts';
 import type { z } from 'zod';
 import { ApiError, api } from '../../services/api';
+import {
+  hardDeleteShipment,
+  markDeletion,
+  unmarkDeletion,
+} from '../../services/shipments';
+import { useAuthStore } from '../../stores/auth';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
 import { ListFilters, type ListFiltersValue } from '../../shared/ui/ListFilters';
+import { PendingDeletionTag } from '../../shared/ui/PendingDeletionTag';
 import { matchText } from '../../shared/utils/matchText';
 
 type List = z.infer<typeof ShipmentListResponseSchema>;
@@ -42,13 +50,19 @@ const KIND_LABELS: Record<ShipmentKind, { label: string; color: string }> = {
 };
 
 const SELECT_WIDTH = 200;
+// Статусы, для которых вместо hard-delete показываем «Пометить на удаление».
+const SOFT_DELETE_STATUSES = new Set(['filled', 'confirmed_mol']);
 
 export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
   const queryClient = useQueryClient();
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
+  const [reasonDraft, setReasonDraft] = useState<Record<string, string>>({});
   const [params, setParams] = useSearchParams();
+  const authUser = useAuthStore((s) => s.user);
+  const isAdmin = authUser?.role === 'admin';
 
-  // tab/shipment/from принадлежат ShipmentPage — не трогаем их при апдейте фильтров.
+  const isTrash = params.get('trash') === '1';
+
   const filters: ListFiltersValue & { status: string | null; plate: string } = {
     contractorId: params.get('contractor'),
     supplierId: params.get('supplier'),
@@ -75,9 +89,16 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     setParams(next, { replace: true });
   };
 
+  const setTrash = (next: boolean) => {
+    const params2 = new URLSearchParams(params);
+    if (next) params2.set('trash', '1');
+    else params2.delete('trash');
+    setParams(params2, { replace: true });
+  };
+
   const list = useQuery({
-    queryKey: ['shipments'],
-    queryFn: () => api.get<List>('/shipments'),
+    queryKey: ['shipments', isTrash ? 'trash' : 'active'],
+    queryFn: () => api.get<List>(isTrash ? '/shipments?trash=1' : '/shipments'),
   });
 
   const counterpartiesQuery = useQuery({
@@ -88,28 +109,29 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     queryKey: ['sites', 'all'],
     queryFn: () => api.get<{ items: Site[]; total: number }>('/sites?limit=500'),
   });
-  // Резолв docNumber для поиска по q и опционального отображения.
   const sourceDocsQuery = useQuery({
     queryKey: ['source-documents', 'all', 'outbound'],
     queryFn: () =>
       api.get<SourceList>('/source-documents?direction=outbound&limit=1000'),
   });
 
-  // Оптимистичное удаление с rollback и индикатором ошибки на строке —
-  // см. эталон в apps/web/src/pages/inbox/Inbox.tsx.
-  const del = useMutation({
-    mutationFn: (id: string) => api.delete<{ ok: true }>(`/shipments/${id}`),
+  const clearErr = (id: string) => {
+    setDeleteErrors((prev) => {
+      if (!(id in prev)) return prev;
+      const { [id]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const hardDel = useMutation({
+    mutationFn: (id: string) => hardDeleteShipment(id),
     retry: (failureCount, err) => {
       if (failureCount >= 2) return false;
       if (err instanceof ApiError && err.status >= 400 && err.status < 500) return false;
       return true;
     },
     onMutate: async (id: string) => {
-      setDeleteErrors((prev) => {
-        if (!(id in prev)) return prev;
-        const { [id]: _removed, ...rest } = prev;
-        return rest;
-      });
+      clearErr(id);
       await queryClient.cancelQueries({ queryKey: ['shipments'] });
       const snapshots = queryClient.getQueriesData<List>({ queryKey: ['shipments'] });
       queryClient.setQueriesData<List>({ queryKey: ['shipments'] }, (old) => {
@@ -133,6 +155,53 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['shipments'] });
       void queryClient.invalidateQueries({ queryKey: ['source-documents'] });
+    },
+  });
+
+  const markDel = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string | null }) =>
+      markDeletion(id, reason),
+    onMutate: async ({ id }) => {
+      clearErr(id);
+      await queryClient.cancelQueries({ queryKey: ['shipments', 'active'] });
+      const prev = queryClient.getQueryData<List>(['shipments', 'active']);
+      queryClient.setQueryData<List>(['shipments', 'active'], (old) => {
+        if (!old || !Array.isArray(old.items)) return old;
+        return { ...old, items: old.items.filter((x) => x.id !== id) };
+      });
+      message.success('Помечено на удаление');
+      return { prev };
+    },
+    onError: (err: Error, { id }, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['shipments', 'active'], ctx.prev);
+      setDeleteErrors((prev) => ({ ...prev, [id]: err.message }));
+      message.error(err.message);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+    },
+  });
+
+  const unmarkDel = useMutation({
+    mutationFn: (id: string) => unmarkDeletion(id),
+    onMutate: async (id) => {
+      clearErr(id);
+      await queryClient.cancelQueries({ queryKey: ['shipments', 'trash'] });
+      const prev = queryClient.getQueryData<List>(['shipments', 'trash']);
+      queryClient.setQueryData<List>(['shipments', 'trash'], (old) => {
+        if (!old || !Array.isArray(old.items)) return old;
+        return { ...old, items: old.items.filter((x) => x.id !== id) };
+      });
+      message.success('Пометка снята');
+      return { prev };
+    },
+    onError: (err: Error, id, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['shipments', 'trash'], ctx.prev);
+      setDeleteErrors((prev) => ({ ...prev, [id]: err.message }));
+      message.error(err.message);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
     },
   });
 
@@ -163,8 +232,6 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     }
     return 'Списание';
   };
-  // Подрядчик/Поставщик — это получатель груза для contractor/return; для transfer/writeoff
-  // получателя как контрагента нет — пусто.
   const renderCounterpartyCol = (r: Row) => {
     if (r.kind !== 'contractor' && r.kind !== 'return') return '—';
     return r.receiverCounterpartyId
@@ -188,7 +255,6 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
 
   const filteredItems = useMemo(() => {
     return items.filter((r) => {
-      // Для отгрузки «подрядчик» и «поставщик» — это receiverCounterpartyId с учётом kind.
       if (filters.contractorId && r.receiverCounterpartyId !== filters.contractorId) {
         return false;
       }
@@ -204,7 +270,6 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
       }
       return true;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     items,
     sourceDocsById,
@@ -216,22 +281,93 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     filters.q,
   ]);
 
-  const renderDeleteButton = (r: Row) => {
+  const renderActions = (r: Row) => {
     const errMsg = deleteErrors[r.id];
+    const errIcon = errMsg ? (
+      <Tooltip title={errMsg}>
+        <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />
+      </Tooltip>
+    ) : null;
+
+    if (isTrash) {
+      const canUnmark = isAdmin || authUser?.id === r.pendingDeletionByUserId;
+      return (
+        <Space size={4} onClick={(e) => e.stopPropagation()}>
+          {errIcon}
+          {canUnmark && (
+            <Tooltip title="Восстановить">
+              <Button
+                size="small"
+                shape="circle"
+                icon={<UndoOutlined />}
+                onClick={() => unmarkDel.mutate(r.id)}
+              />
+            </Tooltip>
+          )}
+          {isAdmin && (
+            <Popconfirm
+              title="Удалить навсегда?"
+              description="Запись, фото и связи с документами будут стёрты."
+              okText="Да, удалить"
+              cancelText="Нет"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => hardDel.mutate(r.id)}
+            >
+              <Tooltip title="Удалить навсегда">
+                <Button danger size="small" shape="circle" icon={<DeleteOutlined />} />
+              </Tooltip>
+            </Popconfirm>
+          )}
+        </Space>
+      );
+    }
+
+    if (SOFT_DELETE_STATUSES.has(r.status.code)) {
+      return (
+        <Space size={4} onClick={(e) => e.stopPropagation()}>
+          {errIcon}
+          <Popconfirm
+            title="Пометить на удаление?"
+            description={
+              <Input.TextArea
+                placeholder="Причина (необязательно)"
+                rows={2}
+                maxLength={500}
+                value={reasonDraft[r.id] ?? ''}
+                onChange={(e) =>
+                  setReasonDraft((prev) => ({ ...prev, [r.id]: e.target.value }))
+                }
+              />
+            }
+            okText="Пометить"
+            cancelText="Нет"
+            onConfirm={() => {
+              const reason = (reasonDraft[r.id] ?? '').trim() || null;
+              markDel.mutate({ id: r.id, reason });
+              setReasonDraft((prev) => {
+                const { [r.id]: _removed, ...rest } = prev;
+                return rest;
+              });
+            }}
+          >
+            <Tooltip title="Пометить на удаление">
+              <Button danger size="small" shape="circle" icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
+      );
+    }
+
     return (
       <Space size={4} onClick={(e) => e.stopPropagation()}>
-        {errMsg && (
-          <Tooltip title={errMsg}>
-            <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />
-          </Tooltip>
-        )}
+        {errIcon}
         <Popconfirm
           title="Удалить отгрузку?"
           description="Запись, фото и связи с документами будут удалены."
           okText="Да, удалить"
           cancelText="Нет"
           okButtonProps={{ danger: true }}
-          onConfirm={() => del.mutate(r.id)}
+          onConfirm={() => hardDel.mutate(r.id)}
         >
           <Button danger size="small" shape="circle" icon={<DeleteOutlined />} />
         </Popconfirm>
@@ -239,8 +375,29 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     );
   };
 
+  const renderStatusCell = (r: Row) => (
+    <Space size={4} wrap>
+      <Tag color={r.status.color ?? 'default'}>{r.status.label}</Tag>
+      {isTrash && (
+        <PendingDeletionTag
+          at={r.pendingDeletionAt}
+          byEmail={r.pendingDeletionByUserEmail}
+          reason={r.pendingDeletionReason}
+        />
+      )}
+    </Space>
+  );
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Segmented
+        value={isTrash ? 'trash' : 'active'}
+        onChange={(v) => setTrash(v === 'trash')}
+        options={[
+          { label: 'Активные', value: 'active' },
+          { label: 'Корзина', value: 'trash' },
+        ]}
+      />
       <ListFilters
         value={filters}
         onChange={updateFilters}
@@ -274,14 +431,12 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
         loading={list.isLoading}
         rowKey="id"
         onRowClick={(r) => onOpen(r.id)}
-        emptyText="Нет отгрузок"
+        emptyText={isTrash ? 'Корзина пуста' : 'Нет отгрузок'}
         columns={[
           {
             title: 'Статус',
             key: 'status',
-            render: (_: unknown, r: Row) => (
-              <Tag color={r.status.color ?? 'default'}>{r.status.label}</Tag>
-            ),
+            render: (_: unknown, r: Row) => renderStatusCell(r),
           },
           {
             title: 'Вид',
@@ -315,19 +470,19 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
           {
             title: '',
             key: 'actions',
-            width: 56,
+            width: 88,
             align: 'right' as const,
             onCell: () => ({
               onClick: (e: MouseEvent) => e.stopPropagation(),
             }),
-            render: (_: unknown, r: Row) => renderDeleteButton(r),
+            render: (_: unknown, r: Row) => renderActions(r),
           },
         ]}
         cardRender={(r) => (
           <Card style={{ width: '100%' }} size="small">
             <Space direction="vertical" size={4} style={{ width: '100%', position: 'relative' }}>
               <Space wrap>
-                <Tag color={r.status.color ?? 'default'}>{r.status.label}</Tag>
+                {renderStatusCell(r)}
                 <Tag color={KIND_LABELS[r.kind].color}>{KIND_LABELS[r.kind].label}</Tag>
                 <Typography.Text strong>{r.vehiclePlate ?? 'Без номера'}</Typography.Text>
               </Space>
@@ -344,7 +499,7 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
                 style={{ position: 'absolute', top: 0, right: 0 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                {renderDeleteButton(r)}
+                {renderActions(r)}
               </div>
             </Space>
           </Card>
