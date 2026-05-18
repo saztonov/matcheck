@@ -36,6 +36,24 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
     },
     async (req) => {
       const since = req.query.since ? new Date(req.query.since) : null;
+      const inspectorOnly = req.user?.role === 'inspector_kpp';
+      const userSiteId = req.user?.siteId ?? null;
+
+      // Инспектор без привязки к объекту не должен видеть никаких данных —
+      // это явная ошибка конфигурации, а не "доступ ко всему".
+      if (inspectorOnly && !userSiteId) {
+        const now = new Date().toISOString();
+        return {
+          cursor: now,
+          serverNow: now,
+          counterparties: [],
+          materials: [],
+          sites: [],
+          sourceDocuments: [],
+          deliveries: [],
+          shipments: [],
+        };
+      }
 
       const cpRows = await app.db
         .select()
@@ -77,18 +95,19 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
             .where(sql_in(sourceDocumentAttachments.sourceDocumentId, sdIds))
         : [];
 
-      const inspectorOnly = req.user?.role === 'inspector_kpp';
-      const inspectorId = req.user?.id;
+      // Инспектор видит всё в рамках своего объекта (включая записи других
+      // инспекторов на том же siteId) — синхронизировано с GET /deliveries,
+      // см. коммит 1833b9d. До этого фильтр был по inspectorId.
       const dRowsJoined = await app.db
         .select({ d: deliveries, s: statuses, molEmail: users.email })
         .from(deliveries)
         .innerJoin(statuses, eq(deliveries.statusId, statuses.id))
         .leftJoin(users, eq(deliveries.confirmedByMolUserId, users.id))
         .where(
-          inspectorOnly && inspectorId
+          inspectorOnly && userSiteId
             ? since
-              ? eqAnd(deliveries.inspectorId, inspectorId, gte(deliveries.updatedAt, since))
-              : eq(deliveries.inspectorId, inspectorId)
+              ? eqAnd(deliveries.siteId, userSiteId, gte(deliveries.updatedAt, since))
+              : eq(deliveries.siteId, userSiteId)
             : since
               ? gte(deliveries.updatedAt, since)
               : undefined,
@@ -110,17 +129,17 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
             .where(sql_in(deliverySources.deliveryId, dIds))
         : [];
 
-      // ── Shipments (симметрично deliveries) ──
+      // ── Shipments (симметрично deliveries: видимость по siteId) ──
       const shRowsJoined = await app.db
         .select({ s: shipments, st: statuses, molEmail: users.email })
         .from(shipments)
         .innerJoin(statuses, eq(shipments.statusId, statuses.id))
         .leftJoin(users, eq(shipments.confirmedByMolUserId, users.id))
         .where(
-          inspectorOnly && inspectorId
+          inspectorOnly && userSiteId
             ? since
-              ? eqAnd(shipments.inspectorId, inspectorId, gte(shipments.updatedAt, since))
-              : eq(shipments.inspectorId, inspectorId)
+              ? eqAnd(shipments.siteId, userSiteId, gte(shipments.updatedAt, since))
+              : eq(shipments.siteId, userSiteId)
             : since
               ? gte(shipments.updatedAt, since)
               : undefined,
