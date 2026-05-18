@@ -14,6 +14,7 @@ import {
   ShipmentUpsertSchema,
 } from '@matcheck/contracts';
 import {
+  entityDeletions,
   shipments,
   shipmentItems,
   shipmentPhotos,
@@ -335,14 +336,14 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
           }
           const dto = await buildShipmentDto(app, input.id);
           if (!dto) return reply.code(404).send({ error: 'not_found' });
-          publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
+          publishEvent(app, { type: 'shipment_updated', entityId: dto.id, ts: new Date().toISOString() });
           return dto;
         }
 
         const created = await createShipment(app, input, statusId, inspectorId);
         const dto = await buildShipmentDto(app, created.id);
         if (!dto) throw new Error('Shipment missing after create');
-        publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
+        publishEvent(app, { type: 'shipment_updated', entityId: dto.id, ts: new Date().toISOString() });
         return dto;
       } catch (err) {
         if (err instanceof SourceAlreadyLinkedError) {
@@ -430,10 +431,20 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         }
       }
 
-      await app.db.delete(shipments).where(eq(shipments.id, req.params.id));
+      // Журнал hard-delete + физическое удаление одной транзакцией:
+      // офлайн-клиент узнаёт об удалении через /sync.deletedIds.
+      await app.db.transaction(async (tx) => {
+        await tx.insert(entityDeletions).values({
+          entityType: 'shipment',
+          entityId: existing.id,
+          siteId: existing.siteId,
+          deletedByUserId: req.user?.id ?? null,
+        });
+        await tx.delete(shipments).where(eq(shipments.id, req.params.id));
+      });
       publishEvent(app, {
         type: 'shipment_deleted',
-        id: req.params.id,
+        entityId: req.params.id,
         ts: new Date().toISOString(),
       });
       return { ok: true as const };
@@ -501,7 +512,7 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         .where(eq(shipments.id, existing.id));
       const dto = await buildShipmentDto(app, existing.id);
       if (!dto) return reply.code(404).send({ error: 'not_found' });
-      publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
+      publishEvent(app, { type: 'shipment_updated', entityId: dto.id, ts: new Date().toISOString() });
       return dto;
     },
   );
@@ -561,7 +572,7 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         .where(eq(shipments.id, existing.id));
       const dto = await buildShipmentDto(app, existing.id);
       if (!dto) return reply.code(404).send({ error: 'not_found' });
-      publishEvent(app, { type: 'shipment_updated', id: dto.id, ts: new Date().toISOString() });
+      publishEvent(app, { type: 'shipment_updated', entityId: dto.id, ts: new Date().toISOString() });
       return dto;
     },
   );

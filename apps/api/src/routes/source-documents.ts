@@ -23,6 +23,7 @@ import {
 import {
   counterparties,
   deliverySources,
+  entityDeletions,
   llmCalls,
   materials,
   shipmentSources,
@@ -293,6 +294,7 @@ async function deleteUpdWithRefsCheck(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app: any,
   id: string,
+  deletedByUserId: string | null,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   log?: { warn: (...args: any[]) => void },
 ): Promise<void> {
@@ -308,13 +310,29 @@ async function deleteUpdWithRefsCheck(
     throw new HasReferencesError(deliveriesCount, shipmentsCount);
   }
 
-  // Забираем s3-ключи ДО hard delete (cascade удалит строки attachments).
+  // Забираем s3-ключи ДО hard delete (cascade удалит строки attachments)
+  // и siteId — для журнала удалений.
   const attachments = await app.db
     .select({ s3Key: sourceDocumentAttachments.s3Key })
     .from(sourceDocumentAttachments)
     .where(eq(sourceDocumentAttachments.sourceDocumentId, id));
+  const [doc] = await app.db
+    .select({ siteId: sourceDocuments.siteId })
+    .from(sourceDocuments)
+    .where(eq(sourceDocuments.id, id))
+    .limit(1);
 
-  await app.db.delete(sourceDocuments).where(eq(sourceDocuments.id, id));
+  // Журнал hard-delete + физическое удаление одной транзакцией:
+  // офлайн-клиент узнаёт об удалении через /sync.deletedIds.
+  await app.db.transaction(async (tx: typeof app.db) => {
+    await tx.insert(entityDeletions).values({
+      entityType: 'source_document',
+      entityId: id,
+      siteId: doc?.siteId ?? null,
+      deletedByUserId,
+    });
+    await tx.delete(sourceDocuments).where(eq(sourceDocuments.id, id));
+  });
 
   const s3Keys = attachments
     .map((a: { s3Key: string }) => a.s3Key)
@@ -613,7 +631,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       }
       if (duplicate && replaceExistingId === duplicate.id) {
         try {
-          await deleteUpdWithRefsCheck(app, duplicate.id, req.log);
+          await deleteUpdWithRefsCheck(app, duplicate.id, req.user?.id ?? null, req.log);
         } catch (err) {
           if (err instanceof HasReferencesError) {
             return reply.code(409).send({ error: 'has_references', message: err.message });
@@ -844,7 +862,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       if (req.body.action === 'skip') {
         // Удаляем загруженный дубль (не существующий оригинал).
         try {
-          await deleteUpdWithRefsCheck(app, sd.id, req.log);
+          await deleteUpdWithRefsCheck(app, sd.id, req.user?.id ?? null, req.log);
         } catch (err) {
           if (err instanceof HasReferencesError) {
             return reply.code(409).send({ error: 'has_references', message: err.message });
@@ -862,7 +880,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           .send({ error: 'bad_request', message: 'В деталях ошибки нет existingId' });
       }
       try {
-        await deleteUpdWithRefsCheck(app, existingId, req.log);
+        await deleteUpdWithRefsCheck(app, existingId, req.user?.id ?? null, req.log);
       } catch (err) {
         if (err instanceof HasReferencesError) {
           return reply.code(409).send({ error: 'has_references', message: err.message });
@@ -1240,7 +1258,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       if (!existing) return reply.code(404).send({ error: 'not_found' });
 
       try {
-        await deleteUpdWithRefsCheck(app, req.params.id, req.log);
+        await deleteUpdWithRefsCheck(app, req.params.id, req.user?.id ?? null, req.log);
       } catch (err) {
         if (err instanceof HasReferencesError) {
           return reply.code(409).send({ error: 'has_references', message: err.message });
@@ -1250,7 +1268,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
 
       publishEvent(app, {
         type: 'source_document_deleted',
-        id: req.params.id,
+        entityId: req.params.id,
         ts: new Date().toISOString(),
       });
       return { ok: true as const };

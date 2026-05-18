@@ -9,6 +9,7 @@ import {
   deliveryItems,
   deliveryPhotos,
   deliverySources,
+  entityDeletions,
   materials,
   shipments,
   shipmentItems,
@@ -52,6 +53,7 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
           sourceDocuments: [],
           deliveries: [],
           shipments: [],
+          deletedIds: { deliveries: [], shipments: [], sourceDocuments: [] },
         };
       }
 
@@ -164,9 +166,42 @@ export async function syncRoutes(rawApp: FastifyInstance): Promise<void> {
             .where(sql_in(shipmentSources.shipmentId, shIds))
         : [];
 
+      // ── deletedIds (журнал hard-delete для офлайн-клиента) ──
+      // Возвращаем только при дельта-sync (since != null) — на initial-sync
+      // клиент стартует с нуля, история удалений не нужна. Для inspector_kpp
+      // фильтр по siteId (записи без siteId — например, до 0024 — не отдаём).
+      let deletedDeliveryIds: string[] = [];
+      let deletedShipmentIds: string[] = [];
+      let deletedSourceDocumentIds: string[] = [];
+      if (since) {
+        const delRows = await app.db
+          .select({ entityType: entityDeletions.entityType, entityId: entityDeletions.entityId })
+          .from(entityDeletions)
+          .where(
+            inspectorOnly && userSiteId
+              ? eqAnd(
+                  entityDeletions.siteId,
+                  userSiteId,
+                  gte(entityDeletions.deletedAt, since),
+                )
+              : gte(entityDeletions.deletedAt, since),
+          );
+        for (const r of delRows) {
+          if (r.entityType === 'delivery') deletedDeliveryIds.push(r.entityId);
+          else if (r.entityType === 'shipment') deletedShipmentIds.push(r.entityId);
+          else if (r.entityType === 'source_document')
+            deletedSourceDocumentIds.push(r.entityId);
+        }
+      }
+
       return {
         cursor: new Date().toISOString(),
         serverNow: new Date().toISOString(),
+        deletedIds: {
+          deliveries: deletedDeliveryIds,
+          shipments: deletedShipmentIds,
+          sourceDocuments: deletedSourceDocumentIds,
+        },
         counterparties: cpRows.map((c) => ({
           id: c.id,
           inn: c.inn,

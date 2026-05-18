@@ -32,13 +32,13 @@ const TABLES: Record<OperationKind, PhotoTable> = {
     kind: 'delivery',
     prefix: 'photos',
     publishUpdated: (app, id) =>
-      publishEvent(app, { type: 'delivery_updated', id, ts: new Date().toISOString() }),
+      publishEvent(app, { type: 'delivery_updated', entityId: id, ts: new Date().toISOString() }),
   },
   shipment: {
     kind: 'shipment',
     prefix: 'shipment_photos',
     publishUpdated: (app, id) =>
-      publishEvent(app, { type: 'shipment_updated', id, ts: new Date().toISOString() }),
+      publishEvent(app, { type: 'shipment_updated', entityId: id, ts: new Date().toISOString() }),
   },
 };
 

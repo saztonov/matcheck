@@ -6,6 +6,16 @@ import { CounterpartySchema } from './counterparties.js';
 import { MaterialSchema } from './materials.js';
 import { SiteSchema } from './sites.js';
 
+// Журнал hard-delete операций. Возвращается /sync с фильтром `deleted_at >= since`
+// (для initial-sync без since — пустые массивы; полная история не нужна).
+// Клиент при обработке /sync должен удалить локальные записи с этими id.
+export const SyncDeletedIdsSchema = z.object({
+  deliveries: z.array(z.string().uuid()),
+  shipments: z.array(z.string().uuid()),
+  sourceDocuments: z.array(z.string().uuid()),
+});
+export type SyncDeletedIds = z.infer<typeof SyncDeletedIdsSchema>;
+
 export const SyncDeltaResponseSchema = z.object({
   cursor: z.string(),
   deliveries: z.array(DeliverySchema),
@@ -14,6 +24,7 @@ export const SyncDeltaResponseSchema = z.object({
   counterparties: z.array(CounterpartySchema),
   materials: z.array(MaterialSchema),
   sites: z.array(SiteSchema),
+  deletedIds: SyncDeletedIdsSchema,
   serverNow: z.string(),
 });
 export type SyncDeltaResponse = z.infer<typeof SyncDeltaResponseSchema>;
@@ -31,7 +42,9 @@ export const SseEventSchema = z.object({
     'site_updated',
     'ping',
   ]),
-  id: z.string().optional(),
+  // ID сущности для событий *_updated / *_deleted. Для ping — отсутствует.
+  // Клиент при `*_deleted` удаляет локальную запись без вызова /sync.
+  entityId: z.string().uuid().optional(),
   ts: z.string(),
 });
 export type SseEvent = z.infer<typeof SseEventSchema>;

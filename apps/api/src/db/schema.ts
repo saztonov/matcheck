@@ -703,6 +703,33 @@ export const shipmentPhotos = pgTable(
   ],
 );
 
+// ─── Entity deletions (журнал hard-delete для офлайн-клиента) ──────────────
+
+export const entityDeletions = pgTable(
+  'entity_deletions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // 'delivery' | 'shipment' | 'source_document' — CHECK в миграции 0025.
+    entityType: text('entity_type').notNull(),
+    entityId: uuid('entity_id').notNull(),
+    siteId: uuid('site_id').references(() => sites.id, { onDelete: 'set null' }),
+    deletedByUserId: uuid('deleted_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('entity_deletions_since_idx').on(t.entityType, t.deletedAt),
+    index('entity_deletions_site_idx')
+      .on(t.entityType, t.siteId, t.deletedAt)
+      .where(sql`${t.siteId} is not null`),
+    check(
+      'entity_deletions_type_chk',
+      sql`${t.entityType} in ('delivery', 'shipment', 'source_document')`,
+    ),
+  ],
+);
+
 // ─── Sync log ──────────────────────────────────────────────────────────────
 
 export const syncLog = pgTable('sync_log', {
