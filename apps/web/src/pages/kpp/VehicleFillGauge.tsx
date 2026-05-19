@@ -31,6 +31,14 @@ function formatNumber(n: number, frac = 1): string {
   return n.toLocaleString('ru-RU', { maximumFractionDigits: frac, minimumFractionDigits: 0 });
 }
 
+const LargusIcon: FC = () => (
+  <svg viewBox="0 0 64 32" width={44} height={22} fill="currentColor" aria-hidden="true">
+    <path d="M10 14 L18 10 H36 L42 14 H50 V22 H10 Z" />
+    <circle cx="20" cy="24" r="3" fill="#fff" stroke="currentColor" strokeWidth="2" />
+    <circle cx="42" cy="24" r="3" fill="#fff" stroke="currentColor" strokeWidth="2" />
+  </svg>
+);
+
 const VanIcon: FC = () => (
   <svg viewBox="0 0 64 32" width={52} height={26} fill="currentColor" aria-hidden="true">
     <path d="M4 8 H34 V24 H4 Z" />
@@ -49,16 +57,6 @@ const TruckIcon: FC = () => (
   </svg>
 );
 
-const SemitrailIcon: FC = () => (
-  <svg viewBox="0 0 64 32" width={60} height={26} fill="currentColor" aria-hidden="true">
-    <path d="M2 8 H40 V24 H2 Z" />
-    <path d="M40 14 H50 L56 20 V24 H40 Z" />
-    <circle cx="10" cy="26" r="3.5" fill="#fff" stroke="currentColor" strokeWidth="2" />
-    <circle cx="28" cy="26" r="3.5" fill="#fff" stroke="currentColor" strokeWidth="2" />
-    <circle cx="49" cy="26" r="3.5" fill="#fff" stroke="currentColor" strokeWidth="2" />
-  </svg>
-);
-
 const EurotruckIcon: FC = () => (
   <svg viewBox="0 0 80 32" width={62} height={26} fill="currentColor" aria-hidden="true">
     <path d="M2 6 H50 V24 H2 Z" />
@@ -71,9 +69,9 @@ const EurotruckIcon: FC = () => (
 );
 
 const VEHICLE_ICONS: Record<VehicleTypeId, FC> = {
+  largus: LargusIcon,
   light: VanIcon,
   truck6m: TruckIcon,
-  semitrail: SemitrailIcon,
   eurotruck: EurotruckIcon,
 };
 
@@ -81,7 +79,8 @@ export function VehicleFillGauge({ items }: Props) {
   const [vehicleId, setVehicleId] = useState<VehicleTypeId>(() => {
     if (typeof window === 'undefined') return DEFAULT_VEHICLE_ID;
     const stored = window.localStorage.getItem(LS_KEY);
-    return (stored as VehicleTypeId | null) ?? DEFAULT_VEHICLE_ID;
+    const isValid = VEHICLE_TYPES.some((v) => v.id === stored);
+    return isValid ? (stored as VehicleTypeId) : DEFAULT_VEHICLE_ID;
   });
 
   useEffect(() => {

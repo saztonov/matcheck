@@ -2,6 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { UserDto } from '@matcheck/contracts';
 import { useAuthStore } from '../../stores/auth';
 import { api, ApiError } from '../../services/api';
+// Импорт активирует подписку на store: при появлении/смене access-токена
+// планируется проактивный refresh за 60с до истечения. Без этого 401 на
+// интервал-driven запросах (sync, focus-refetch) копятся в DevTools.
+import '../../services/authScheduler';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const setAuth = useAuthStore((s) => s.setAuth);

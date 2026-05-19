@@ -43,7 +43,7 @@ const ListQuerySchema = z.object({
   direction: z.enum(['inbound', 'outbound']).optional(),
   q: z.string().trim().min(1).max(200).optional(),
   unaccepted: z.coerce.boolean().optional(),
-  limit: z.coerce.number().int().positive().max(200).default(50),
+  limit: z.coerce.number().int().positive().max(2000).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
 });
 
