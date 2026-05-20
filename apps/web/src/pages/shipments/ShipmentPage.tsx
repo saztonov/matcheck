@@ -24,6 +24,7 @@ import {
   ArrowLeftOutlined,
   CameraOutlined,
   DeleteOutlined,
+  LinkOutlined,
   PlusOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
@@ -62,6 +63,7 @@ import { useBreakpoint } from '../../shared/hooks/useBreakpoint';
 import { PhotoGallery } from '../kpp/PhotoGallery';
 import { ShipmentsHistory } from './ShipmentsHistory';
 import { ExpectedOutbound } from './ExpectedOutbound';
+import { LinkSourceDocumentModal } from '../shared/LinkSourceDocumentModal';
 
 type DraftItem = {
   clientKey: string;
@@ -144,6 +146,8 @@ export default function ShipmentPage() {
   const [plate, setPlate] = useState('');
   const [driverName, setDriverName] = useState('');
   const [comment, setComment] = useState('');
+  const [linkUpdOpen, setLinkUpdOpen] = useState(false);
+  const [linkUpdError, setLinkUpdError] = useState<string | null>(null);
 
   // ID отгрузки, для которой уже выполнили первичную гидратацию формы из server data.
   // Защищает локальные правки (plate/driverName/comment/items) от затирания при рефетче
@@ -294,16 +298,28 @@ export default function ShipmentPage() {
   // без переписки. Фактические items/receiver/comment живут в локальном state формы.
   const virtualShipment: Shipment | null = useMemo(() => {
     if (!isNew || !shipmentId) return null;
+    // До первого «Сохранить» статус виртуальной отгрузки определяется по наличию
+    // updIdFromUrl: с УПД — обычный not_filled, без УПД — no_document.
+    const initialStatus: Status = updIdFromUrl
+      ? {
+          id: '',
+          entityType: 'shipment',
+          code: 'not_filled',
+          label: 'Не оформлена',
+          color: null,
+          sortOrder: 0,
+        }
+      : {
+          id: '',
+          entityType: 'shipment',
+          code: 'no_document',
+          label: 'Без документа',
+          color: 'gold',
+          sortOrder: 15,
+        };
     return {
       id: shipmentId,
-      status: {
-        id: '',
-        entityType: 'shipment',
-        code: 'not_filled',
-        label: 'Не оформлена',
-        color: null,
-        sortOrder: 0,
-      },
+      status: initialStatus,
       kind: 'contractor',
       siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
       receiverCounterpartyId: null,
@@ -500,9 +516,16 @@ export default function ShipmentPage() {
   const save = useMutation({
     mutationFn: async () => {
       if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+      // Если УПД не привязана — статус «Без документа» (сервер всё равно
+      // нормализует, но локальный optimistic-state должен совпадать).
+      const hasUpd = loadedShipment.sourceDocumentIds.length > 0;
       const currentCode = loadedShipment.status.code as ShipmentStatusCode;
       const nextCode: ShipmentStatusCode =
-        currentCode === 'confirmed_mol' ? 'confirmed_mol' : 'shipped';
+        currentCode === 'confirmed_mol'
+          ? 'confirmed_mol'
+          : hasUpd
+            ? 'shipped'
+            : 'no_document';
       await persistStatus(nextCode);
     },
     onSuccess: () => {
@@ -523,6 +546,44 @@ export default function ShipmentPage() {
       navigate('/shipments');
     },
     onError: (err: Error) => message.error(err.message),
+  });
+
+  // Ручная привязка УПД к отгрузке «Без документа» на портале (только admin/manager).
+  // Симметрично linkUpd в KppPage.tsx.
+  const linkUpd = useMutation({
+    mutationFn: async (upd: SourceDocument): Promise<Shipment> => {
+      if (!loadedShipment) throw new Error('Отгрузка ещё не загружена');
+      const payload = {
+        id: loadedShipment.id,
+        statusCode: 'not_filled' as ShipmentStatusCode,
+        kind: loadedShipment.kind,
+        siteId: loadedShipment.siteId,
+        receiverCounterpartyId: loadedShipment.receiverCounterpartyId,
+        receiverMolId: loadedShipment.receiverMolId,
+        destSiteId: loadedShipment.destSiteId,
+        vehiclePlate: loadedShipment.vehiclePlate,
+        driverName: loadedShipment.driverName,
+        shippedAt: loadedShipment.shippedAt,
+        comment: loadedShipment.comment,
+        sourceDocumentIds: [upd.id],
+        items: [],
+        baseVersion: loadedShipment.version,
+      };
+      return await api.post<Shipment>('/shipments', payload);
+    },
+    onSuccess: async (dto) => {
+      await upsertServerSnapshot([dto]);
+      message.success('УПД привязана');
+      setLinkUpdOpen(false);
+      setLinkUpdError(null);
+      hydratedIdRef.current = null;
+      void queryClient.invalidateQueries({ queryKey: ['shipments', shipmentId] });
+      void queryClient.invalidateQueries({ queryKey: ['shipments'] });
+      void queryClient.invalidateQueries({ queryKey: ['source-documents'] });
+    },
+    onError: (err: Error) => {
+      setLinkUpdError(err.message);
+    },
   });
 
   const markDel = useMutation({
@@ -592,7 +653,14 @@ export default function ShipmentPage() {
     }
     if (!plate.trim()) reasons.push('Заполните госномер');
     if (photosCount === 0) reasons.push('Сделайте хотя бы одно фото');
-    if (items.filter((it) => it.nameRaw.trim().length > 0).length === 0)
+    // Позиции обязательны только если привязана УПД. Отгрузка без УПД
+    // оформляется одними фото — позиции подтянутся позже при ручной
+    // привязке УПД на портале (см. updateShipment на сервере).
+    const hasUpdNow = (loadedShipment?.sourceDocumentIds.length ?? 0) > 0;
+    if (
+      hasUpdNow &&
+      items.filter((it) => it.nameRaw.trim().length > 0).length === 0
+    )
       reasons.push('Добавьте хотя бы одну позицию');
     return reasons.length ? reasons.join(' · ') : null;
   })();
@@ -826,6 +894,46 @@ export default function ShipmentPage() {
             }
           />
         )}
+
+        {loadedShipment?.status.code === 'no_document' && !isNew && (
+          <Alert
+            type="info"
+            showIcon
+            message="Отгрузка без УПД"
+            description={
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Typography.Text>
+                  Этот документ был оформлен инспектором без выбранной УПД
+                  (только с фото). Когда УПД появится на портале, привяжите
+                  её — позиции подтянутся автоматически.
+                </Typography.Text>
+                {!isInspector && (
+                  <Button
+                    icon={<LinkOutlined />}
+                    onClick={() => {
+                      setLinkUpdError(null);
+                      setLinkUpdOpen(true);
+                    }}
+                  >
+                    Привязать УПД
+                  </Button>
+                )}
+              </Space>
+            }
+          />
+        )}
+
+        <LinkSourceDocumentModal
+          open={linkUpdOpen}
+          onCancel={() => {
+            if (!linkUpd.isPending) setLinkUpdOpen(false);
+          }}
+          onPick={(upd) => linkUpd.mutate(upd)}
+          direction="outbound"
+          siteId={loadedShipment?.siteId === SYSTEM_SITE_ID ? null : loadedShipment?.siteId ?? null}
+          busy={linkUpd.isPending}
+          error={linkUpdError}
+        />
 
         <Card size="small" title="Вид отгрузки" styles={{ body: { padding: 12 } }}>
           <Segmented

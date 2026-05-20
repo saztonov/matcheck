@@ -19,6 +19,7 @@ import {
   shipmentItems,
   shipmentPhotos,
   shipmentSources,
+  sourceDocumentItems,
   statuses,
   users,
 } from '../db/schema.js';
@@ -43,7 +44,8 @@ const ListQuerySchema = z.object({
 });
 
 // Статусы, при которых разрешён hard-delete без предварительной пометки.
-const HARD_DELETE_STATUSES = new Set(['draft', 'not_filled']);
+// 'no_document' — отгрузка без УПД (только фото), удаляется напрямую.
+const HARD_DELETE_STATUSES = new Set(['draft', 'not_filled', 'no_document']);
 // Статусы, для которых соответственно требуется soft-delete (mark → admin hard).
 const SOFT_DELETE_STATUSES = new Set(['filled', 'confirmed_mol']);
 
@@ -305,7 +307,12 @@ export async function shipmentRoutes(rawApp: FastifyInstance): Promise<void> {
         input.siteId = req.user.siteId;
       }
 
-      const statusId = await resolveStatusId(app, input.statusCode);
+      // Нормализация статуса по пустоте sourceDocumentIds — см. комментарий
+      // в /api/v1/deliveries: офлайн-планшеты не могут отправить, например,
+      // 'shipped' без УПД, сервер форсит 'no_document'.
+      const effectiveStatusCode =
+        input.sourceDocumentIds.length === 0 ? 'no_document' : input.statusCode;
+      const statusId = await resolveStatusId(app, effectiveStatusCode);
 
       // Дополнительная валидация согласованности kind ↔ receiver/destSite,
       // BD-CHECK даст более грубое сообщение — отдадим клиенту что-то понятное.
@@ -705,6 +712,33 @@ async function updateShipment(
       : statusId;
   const isFirstConfirm =
     input.statusCode === 'confirmed_mol' && existing.confirmedByMolUserId === null;
+
+  // Ручная привязка УПД к отгрузке «Без документа» на портале: клиент шлёт
+  // непустой sourceDocumentIds и пустой items — сервер подтягивает позиции
+  // из УПД. См. updateDelivery (симметрично).
+  const itemsForInsert =
+    existingCode === 'no_document' &&
+    input.sourceDocumentIds.length > 0 &&
+    input.items.length === 0
+      ? await buildShipmentItemsFromSources(app, input.sourceDocumentIds)
+      : input.items.map((i) => ({
+          itemKind: i.itemKind,
+          materialId: i.itemKind === 'asset' ? null : (i.materialId ?? null),
+          assetId: i.itemKind === 'asset' ? (i.assetId ?? null) : null,
+          inventoryNumber: i.inventoryNumber ?? null,
+          serialNumber: i.serialNumber ?? null,
+          nameRaw: i.nameRaw,
+          qtyPlanned: i.qtyPlanned ?? null,
+          qtyActual: i.qtyActual ?? null,
+          unit: i.unit,
+          comment: i.comment ?? null,
+          lineNo: i.lineNo,
+          volumeM3: i.volumeM3 ?? null,
+          massKg: i.massKg ?? null,
+          volumeConfidence: i.volumeConfidence ?? null,
+          groupName: i.groupName ?? null,
+        }));
+
   await app.db
     .update(shipments)
     .set({
@@ -727,26 +761,9 @@ async function updateShipment(
     })
     .where(eq(shipments.id, id));
   await app.db.delete(shipmentItems).where(eq(shipmentItems.shipmentId, id));
-  if (input.items.length) {
+  if (itemsForInsert.length) {
     await app.db.insert(shipmentItems).values(
-      input.items.map((i) => ({
-        shipmentId: id,
-        itemKind: i.itemKind,
-        materialId: i.itemKind === 'asset' ? null : (i.materialId ?? null),
-        assetId: i.itemKind === 'asset' ? (i.assetId ?? null) : null,
-        inventoryNumber: i.inventoryNumber ?? null,
-        serialNumber: i.serialNumber ?? null,
-        nameRaw: i.nameRaw,
-        qtyPlanned: i.qtyPlanned ?? null,
-        qtyActual: i.qtyActual ?? null,
-        unit: i.unit,
-        comment: i.comment ?? null,
-        lineNo: i.lineNo,
-        volumeM3: i.volumeM3 ?? null,
-        massKg: i.massKg ?? null,
-        volumeConfidence: i.volumeConfidence ?? null,
-        groupName: i.groupName ?? null,
-      })),
+      itemsForInsert.map((i) => ({ ...i, shipmentId: id })),
     );
   }
   if (input.sourceDocumentIds.length) {
@@ -765,4 +782,54 @@ async function updateShipment(
       throw err;
     }
   }
+}
+
+// Подтягивает позиции из привязываемых УПД в формате shipment_items.
+// Симметрично buildDeliveryItemsFromSources в routes/deliveries.ts.
+async function buildShipmentItemsFromSources(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  app: any,
+  sourceDocumentIds: string[],
+): Promise<
+  Array<{
+    itemKind: 'material';
+    materialId: string | null;
+    assetId: null;
+    inventoryNumber: null;
+    serialNumber: null;
+    nameRaw: string;
+    qtyPlanned: string | null;
+    qtyActual: null;
+    unit: string;
+    comment: null;
+    lineNo: number;
+    volumeM3: string | null;
+    massKg: string | null;
+    volumeConfidence: 'low' | 'medium' | 'high' | null;
+    groupName: string | null;
+  }>
+> {
+  if (!sourceDocumentIds.length) return [];
+  const rows: (typeof sourceDocumentItems.$inferSelect)[] = await app.db
+    .select()
+    .from(sourceDocumentItems)
+    .where(inArray(sourceDocumentItems.sourceDocumentId, sourceDocumentIds))
+    .orderBy(sourceDocumentItems.lineNo);
+  return rows.map((r, idx) => ({
+    itemKind: 'material' as const,
+    materialId: r.materialId,
+    assetId: null,
+    inventoryNumber: null,
+    serialNumber: null,
+    nameRaw: r.nameRaw,
+    qtyPlanned: r.qty,
+    qtyActual: null,
+    unit: r.unit,
+    comment: null,
+    lineNo: idx + 1,
+    volumeM3: r.volumeM3,
+    massKg: r.massKg,
+    volumeConfidence: r.volumeConfidence as 'low' | 'medium' | 'high' | null,
+    groupName: r.groupName,
+  }));
 }

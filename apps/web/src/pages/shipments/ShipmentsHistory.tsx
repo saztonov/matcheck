@@ -61,7 +61,16 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
   const authUser = useAuthStore((s) => s.user);
   const isAdmin = authUser?.role === 'admin';
 
-  const isTrash = params.get('trash') === '1';
+  // Три вкладки: «Активные» (без no_document), «Без документа», «Корзина».
+  // См. соответствующий комментарий в DeliveriesHistory.tsx.
+  type View = 'active' | 'no_document' | 'trash';
+  const view: View =
+    params.get('trash') === '1'
+      ? 'trash'
+      : params.get('view') === 'no_document'
+        ? 'no_document'
+        : 'active';
+  const isTrash = view === 'trash';
 
   const filters: ListFiltersValue & { status: string | null; plate: string } = {
     contractorId: params.get('contractor'),
@@ -89,16 +98,25 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
     setParams(next, { replace: true });
   };
 
-  const setTrash = (next: boolean) => {
+  const setView = (next: View) => {
     const params2 = new URLSearchParams(params);
-    if (next) params2.set('trash', '1');
-    else params2.delete('trash');
+    params2.delete('trash');
+    params2.delete('view');
+    if (next === 'trash') params2.set('trash', '1');
+    else if (next === 'no_document') params2.set('view', 'no_document');
     setParams(params2, { replace: true });
   };
 
   const list = useQuery({
-    queryKey: ['shipments', isTrash ? 'trash' : 'active'],
-    queryFn: () => api.get<List>(isTrash ? '/shipments?trash=1' : '/shipments'),
+    queryKey: ['shipments', view],
+    queryFn: () =>
+      api.get<List>(
+        view === 'trash'
+          ? '/shipments?trash=1'
+          : view === 'no_document'
+            ? '/shipments?status=no_document'
+            : '/shipments',
+      ),
   });
 
   const counterpartiesQuery = useQuery({
@@ -255,6 +273,8 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
 
   const filteredItems = useMemo(() => {
     return items.filter((r) => {
+      // Активная вкладка не показывает «Без документа» — для них есть отдельная.
+      if (view === 'active' && r.status.code === 'no_document') return false;
       if (filters.contractorId && r.receiverCounterpartyId !== filters.contractorId) {
         return false;
       }
@@ -273,6 +293,7 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
   }, [
     items,
     sourceDocsById,
+    view,
     filters.contractorId,
     filters.supplierId,
     filters.siteId,
@@ -391,10 +412,11 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Segmented
-        value={isTrash ? 'trash' : 'active'}
-        onChange={(v) => setTrash(v === 'trash')}
+        value={view}
+        onChange={(v) => setView(v as View)}
         options={[
           { label: 'Активные', value: 'active' },
+          { label: 'Без документа', value: 'no_document' },
           { label: 'Корзина', value: 'trash' },
         ]}
       />
@@ -408,14 +430,16 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
         searchPlaceholder="Номер документа"
         extra={
           <>
-            <Select<string>
-              style={{ width: SELECT_WIDTH }}
-              placeholder="Статус"
-              value={filters.status ?? undefined}
-              onChange={(v) => updateFilters({ status: v ?? null })}
-              allowClear
-              options={statusOptions}
-            />
+            {view !== 'no_document' && (
+              <Select<string>
+                style={{ width: SELECT_WIDTH }}
+                placeholder="Статус"
+                value={filters.status ?? undefined}
+                onChange={(v) => updateFilters({ status: v ?? null })}
+                allowClear
+                options={statusOptions}
+              />
+            )}
             <Input.Search
               style={{ width: 180 }}
               placeholder="Номер авто"
@@ -431,7 +455,13 @@ export function ShipmentsHistory({ onOpen }: { onOpen: (id: string) => void }) {
         loading={list.isLoading}
         rowKey="id"
         onRowClick={(r) => onOpen(r.id)}
-        emptyText={isTrash ? 'Корзина пуста' : 'Нет отгрузок'}
+        emptyText={
+          view === 'trash'
+            ? 'Корзина пуста'
+            : view === 'no_document'
+              ? 'Нет отгрузок без документа'
+              : 'Нет отгрузок'
+        }
         columns={[
           {
             title: 'Статус',

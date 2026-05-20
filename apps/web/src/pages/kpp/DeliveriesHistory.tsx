@@ -52,7 +52,17 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
   const authUser = useAuthStore((s) => s.user);
   const isAdmin = authUser?.role === 'admin';
 
-  const isTrash = params.get('trash') === '1';
+  // Три вкладки: «Активные» (без no_document), «Без документа» (приёмки,
+  // созданные инспектором без УПД), «Корзина». Совместимость с URL: trash=1
+  // оставлен как есть; view=no_document — новый параметр.
+  type View = 'active' | 'no_document' | 'trash';
+  const view: View =
+    params.get('trash') === '1'
+      ? 'trash'
+      : params.get('view') === 'no_document'
+        ? 'no_document'
+        : 'active';
+  const isTrash = view === 'trash';
 
   const filters: ListFiltersValue & { status: string | null; plate: string } = {
     contractorId: params.get('contractor'),
@@ -80,16 +90,25 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
     setParams(next, { replace: true });
   };
 
-  const setTrash = (next: boolean) => {
+  const setView = (next: View) => {
     const params2 = new URLSearchParams(params);
-    if (next) params2.set('trash', '1');
-    else params2.delete('trash');
+    params2.delete('trash');
+    params2.delete('view');
+    if (next === 'trash') params2.set('trash', '1');
+    else if (next === 'no_document') params2.set('view', 'no_document');
     setParams(params2, { replace: true });
   };
 
   const list = useQuery({
-    queryKey: ['deliveries', isTrash ? 'trash' : 'active'],
-    queryFn: () => api.get<List>(isTrash ? '/deliveries?trash=1' : '/deliveries'),
+    queryKey: ['deliveries', view],
+    queryFn: () =>
+      api.get<List>(
+        view === 'trash'
+          ? '/deliveries?trash=1'
+          : view === 'no_document'
+            ? '/deliveries?status=no_document'
+            : '/deliveries',
+      ),
   });
 
   const counterpartiesQuery = useQuery({
@@ -247,6 +266,8 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
 
   const filteredItems = useMemo(() => {
     return items.filter((r) => {
+      // Активная вкладка не показывает «Без документа» — для них есть отдельная вкладка.
+      if (view === 'active' && r.status.code === 'no_document') return false;
       const c = resolveContractor(r);
       const s = resolveSite(r);
       if (filters.contractorId && c.id !== filters.contractorId) return false;
@@ -263,6 +284,7 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
   }, [
     items,
     sourceDocsById,
+    view,
     filters.contractorId,
     filters.supplierId,
     filters.siteId,
@@ -402,10 +424,11 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Segmented
-        value={isTrash ? 'trash' : 'active'}
-        onChange={(v) => setTrash(v === 'trash')}
+        value={view}
+        onChange={(v) => setView(v as View)}
         options={[
           { label: 'Активные', value: 'active' },
+          { label: 'Без документа', value: 'no_document' },
           { label: 'Корзина', value: 'trash' },
         ]}
       />
@@ -419,14 +442,16 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
         searchPlaceholder="Номер документа"
         extra={
           <>
-            <Select<string>
-              style={{ width: SELECT_WIDTH }}
-              placeholder="Статус"
-              value={filters.status ?? undefined}
-              onChange={(v) => updateFilters({ status: v ?? null })}
-              allowClear
-              options={statusOptions}
-            />
+            {view !== 'no_document' && (
+              <Select<string>
+                style={{ width: SELECT_WIDTH }}
+                placeholder="Статус"
+                value={filters.status ?? undefined}
+                onChange={(v) => updateFilters({ status: v ?? null })}
+                allowClear
+                options={statusOptions}
+              />
+            )}
             <Input.Search
               style={{ width: 180 }}
               placeholder="Номер авто"
@@ -442,7 +467,13 @@ export function DeliveriesHistory({ onOpen }: { onOpen: (id: string) => void }) 
         loading={list.isLoading}
         rowKey="id"
         onRowClick={(r) => onOpen(r.id)}
-        emptyText={isTrash ? 'Корзина пуста' : 'Нет приёмок'}
+        emptyText={
+          view === 'trash'
+            ? 'Корзина пуста'
+            : view === 'no_document'
+              ? 'Нет приёмок без документа'
+              : 'Нет приёмок'
+        }
         columns={[
           {
             title: 'Статус',

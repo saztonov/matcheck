@@ -64,6 +64,8 @@ import { ExpectedUpds } from './ExpectedUpds';
 import { PhotoGallery } from './PhotoGallery';
 import { VehicleFillGauge } from './VehicleFillGauge';
 import { GroupedItemsList } from './grouping/GroupedItemsList';
+import { LinkSourceDocumentModal } from '../shared/LinkSourceDocumentModal';
+import { LinkOutlined } from '@ant-design/icons';
 
 type DraftItem = {
   clientKey: string;
@@ -138,6 +140,8 @@ export default function KppPage() {
   const [contractorId, setContractorId] = useState<string | null>(null);
   const [recipientMolId, setRecipientMolId] = useState<string | null>(null);
   const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
+  const [linkUpdOpen, setLinkUpdOpen] = useState(false);
+  const [linkUpdError, setLinkUpdError] = useState<string | null>(null);
 
   // ID приёмки, для которой уже выполнили первичную гидратацию формы из server data.
   // Защищает локальные правки (plate/comment/items) от затирания при рефетче
@@ -228,16 +232,28 @@ export default function KppPage() {
   // без переписки. Фактические items/plate/comment живут в локальном state формы.
   const virtualDelivery: Delivery | null = useMemo(() => {
     if (!isNew || !deliveryId) return null;
+    // До первого «Сохранить» статус виртуальной приёмки определяется по наличию
+    // updIdFromUrl: с УПД — обычный not_filled, без УПД — no_document.
+    const initialStatus: Status = updIdFromUrl
+      ? {
+          id: '',
+          entityType: 'delivery',
+          code: 'not_filled',
+          label: 'Не оформлена',
+          color: null,
+          sortOrder: 0,
+        }
+      : {
+          id: '',
+          entityType: 'delivery',
+          code: 'no_document',
+          label: 'Без документа',
+          color: 'gold',
+          sortOrder: 15,
+        };
     return {
       id: deliveryId,
-      status: {
-        id: '',
-        entityType: 'delivery',
-        code: 'not_filled',
-        label: 'Не оформлена',
-        color: null,
-        sortOrder: 0,
-      },
+      status: initialStatus,
       siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
       supplierId: null,
       contractorId: null,
@@ -520,11 +536,16 @@ export default function KppPage() {
   const save = useMutation({
     mutationFn: async () => {
       if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
-      // Обычное «Сохранить» не должно «понижать» подтверждённый документ —
-      // если он уже confirmed_mol, оставляем этот статус.
+      // Обычное «Сохранить» не должно «понижать» подтверждённый документ.
+      // Если УПД не выбрана — статус «Без документа» (сервер всё равно
+      // нормализует, но локальный optimistic-state должен совпадать).
       const currentCode = loadedDelivery.status.code as DeliveryStatusCode;
       const nextCode: DeliveryStatusCode =
-        currentCode === 'confirmed_mol' ? 'confirmed_mol' : 'filled';
+        currentCode === 'confirmed_mol'
+          ? 'confirmed_mol'
+          : selectedUpd
+            ? 'filled'
+            : 'no_document';
       await persistStatus(nextCode);
     },
     onSuccess: () => {
@@ -545,6 +566,46 @@ export default function KppPage() {
       navigate('/kpp?tab=accepted');
     },
     onError: (err: Error) => message.error(err.message),
+  });
+
+  // Ручная привязка УПД к приёмке «Без документа» на портале (только admin/manager).
+  // Шлём прямой POST /deliveries с непустым sourceDocumentIds и пустым items —
+  // сервер сам подтянет позиции из УПД и переведёт статус в not_filled. IDB не
+  // трогаем: эта операция выполняется на портале, локальный snapshot инспектора
+  // обновится при следующем pullSync.
+  const linkUpd = useMutation({
+    mutationFn: async (upd: SourceDocument): Promise<Delivery> => {
+      if (!loadedDelivery) throw new Error('Приёмка ещё не загружена');
+      const payload = {
+        id: loadedDelivery.id,
+        statusCode: 'not_filled' as DeliveryStatusCode,
+        siteId: loadedDelivery.siteId,
+        supplierId: upd.supplierId ?? loadedDelivery.supplierId ?? null,
+        contractorId: loadedDelivery.contractorId,
+        recipientMolId: loadedDelivery.recipientMolId,
+        vehiclePlate: loadedDelivery.vehiclePlate,
+        driverName: loadedDelivery.driverName,
+        arrivedAt: loadedDelivery.arrivedAt,
+        comment: loadedDelivery.comment,
+        sourceDocumentIds: [upd.id],
+        items: [],
+        baseVersion: loadedDelivery.version,
+      };
+      return await api.post<Delivery>('/deliveries', payload);
+    },
+    onSuccess: async (dto) => {
+      await upsertServerSnapshot([dto]);
+      message.success('УПД привязана');
+      setLinkUpdOpen(false);
+      setLinkUpdError(null);
+      hydratedIdRef.current = null;
+      void queryClient.invalidateQueries({ queryKey: ['deliveries', deliveryId] });
+      void queryClient.invalidateQueries({ queryKey: ['deliveries'] });
+      void queryClient.invalidateQueries({ queryKey: ['source-documents'] });
+    },
+    onError: (err: Error) => {
+      setLinkUpdError(err.message);
+    },
   });
 
   const markDel = useMutation({
@@ -944,12 +1005,40 @@ export default function KppPage() {
                     </Typography.Text>
                   </Space>
                 ) : (
-                  <Typography.Text type="secondary">— без УПД —</Typography.Text>
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    <Typography.Text type="secondary">— без УПД —</Typography.Text>
+                    {!isInspector &&
+                      loadedDelivery?.status.code === 'no_document' &&
+                      !isNew && (
+                        <Button
+                          size="small"
+                          icon={<LinkOutlined />}
+                          onClick={() => {
+                            setLinkUpdError(null);
+                            setLinkUpdOpen(true);
+                          }}
+                        >
+                          Привязать УПД
+                        </Button>
+                      )}
+                  </Space>
                 )}
               </Card>
             )}
           </Col>
         </Row>
+
+        <LinkSourceDocumentModal
+          open={linkUpdOpen}
+          onCancel={() => {
+            if (!linkUpd.isPending) setLinkUpdOpen(false);
+          }}
+          onPick={(upd) => linkUpd.mutate(upd)}
+          direction="inbound"
+          siteId={loadedDelivery?.siteId === SYSTEM_SITE_ID ? null : loadedDelivery?.siteId ?? null}
+          busy={linkUpd.isPending}
+          error={linkUpdError}
+        />
 
         <VehicleFillGauge
           items={items.map((it) => ({
