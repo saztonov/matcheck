@@ -1,8 +1,21 @@
 import { useState } from 'react';
-import { Alert, Button, Form, List, Modal, Space, Tag, Typography, Upload, message } from 'antd';
+import {
+  Alert,
+  Button,
+  DatePicker,
+  Form,
+  List,
+  Modal,
+  Space,
+  Tag,
+  Typography,
+  Upload,
+  message,
+} from 'antd';
 import { InboxOutlined, FilePdfOutlined } from '@ant-design/icons';
 import type { UploadFile, UploadProps } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
+import type { Dayjs } from 'dayjs';
 import type { SourceDirection, UpdPdfQueueResponse } from '@matcheck/contracts';
 import { apiUploadFile, ApiError } from '../../services/api';
 import { ContractorSelect } from './ContractorSelect';
@@ -35,12 +48,14 @@ export function UpdPdfUploadModal({
   const qc = useQueryClient();
   const [contractorId, setContractorId] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
+  const [expectedDate, setExpectedDate] = useState<Dayjs | null>(null);
   const [rows, setRows] = useState<FileRow[]>([]);
   const [uploading, setUploading] = useState(false);
 
   function reset() {
     setContractorId(null);
     setSiteId(null);
+    setExpectedDate(null);
     setRows([]);
     setUploading(false);
   }
@@ -94,6 +109,7 @@ export function UpdPdfUploadModal({
               direction,
               contractorId,
               siteId,
+              ...(expectedDate ? { expectedDate: expectedDate.format('YYYY-MM-DD') } : {}),
             },
           },
         );
@@ -166,6 +182,18 @@ export function UpdPdfUploadModal({
         </Form.Item>
         <Form.Item label="Объект" required>
           <SiteSelect value={siteId} onChange={setSiteId} disabled={uploading} />
+        </Form.Item>
+        <Form.Item
+          label="Дата поставки"
+          extra="Необязательное поле. Применяется ко всем загружаемым файлам."
+        >
+          <DatePicker
+            value={expectedDate}
+            onChange={setExpectedDate}
+            format="YYYY-MM-DD"
+            disabled={uploading}
+            style={{ width: '100%' }}
+          />
         </Form.Item>
         <Form.Item label="Файлы PDF" required>
           <Upload.Dragger {...uploadProps} disabled={uploading}>

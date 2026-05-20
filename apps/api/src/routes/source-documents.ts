@@ -619,7 +619,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       const recipientId = parsed.recipient
         ? await findOrCreateCounterparty(app, parsed.recipient, 'customer')
         : null;
-      const { contractorId, siteId, replaceExistingId } = req.body;
+      const { contractorId, siteId, replaceExistingId, expectedDate } = req.body;
 
       const docDate = parsed.docDate ? new Date(parsed.docDate) : null;
       const duplicate = await findUpdDuplicate(app, {
@@ -659,6 +659,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           siteId,
           docNumber: parsed.docNumber,
           docDate,
+          expectedDate: expectedDate ? new Date(expectedDate) : null,
           totalSum: parsed.totalSum?.toString() ?? null,
           vatSum: parsed.vatSum?.toString() ?? null,
           validation,
@@ -734,7 +735,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           message: meta.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
         });
       }
-      const { direction, contractorId, siteId } = meta.data;
+      const { direction, contractorId, siteId, expectedDate } = meta.data;
 
       const buffer = await fileData.toBuffer();
       if (buffer.length === 0) {
@@ -808,6 +809,7 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
           origin: 'manual_pdf',
           contractorId,
           siteId,
+          expectedDate: expectedDate ? new Date(expectedDate) : null,
           status: 'queued',
           contentHash,
           originalFilename: fileData.filename,
@@ -1068,6 +1070,13 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
   const UpdPatchSchema = z.object({
     docNumber: z.string().nullable().optional(),
     docDate: z.string().nullable().optional(),
+    expectedDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .nullable()
+      .optional(),
+    contractorId: z.string().uuid().nullable().optional(),
+    siteId: z.string().uuid().nullable().optional(),
     totalSum: z.union([z.number(), z.string()]).nullable().optional(),
     supplier: z
       .object({
@@ -1113,6 +1122,11 @@ export async function sourceDocumentRoutes(rawApp: FastifyInstance): Promise<voi
       if (req.body.docDate !== undefined) {
         upd.docDate = req.body.docDate ? new Date(req.body.docDate) : null;
       }
+      if (req.body.expectedDate !== undefined) {
+        upd.expectedDate = req.body.expectedDate ? new Date(req.body.expectedDate) : null;
+      }
+      if (req.body.contractorId !== undefined) upd.contractorId = req.body.contractorId;
+      if (req.body.siteId !== undefined) upd.siteId = req.body.siteId;
       if (req.body.totalSum !== undefined) {
         upd.totalSum =
           req.body.totalSum === null

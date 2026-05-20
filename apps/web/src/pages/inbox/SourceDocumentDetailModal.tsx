@@ -28,6 +28,8 @@ import { useAuthStore } from '../../stores/auth';
 import { api, ApiError } from '../../services/api';
 import { formatDecimal } from '../../shared/utils/formatDecimal';
 import { LlmCallsDrawer } from './LlmCallsDrawer';
+import { ContractorSelect } from './ContractorSelect';
+import { SiteSelect } from './SiteSelect';
 
 type Item = SourceDocumentDetail['items'][number];
 
@@ -42,6 +44,9 @@ type EditItem = {
 type EditForm = {
   docNumber: string | null;
   docDate: Dayjs | null;
+  expectedDate: Dayjs | null;
+  contractorId: string | null;
+  siteId: string | null;
   totalSum: string | null;
   items: EditItem[];
 };
@@ -79,6 +84,9 @@ function initialForm(sd: SourceDocumentDetail): EditForm {
   return {
     docNumber: sd.docNumber,
     docDate: sd.docDate ? dayjs(sd.docDate) : null,
+    expectedDate: sd.expectedDate ? dayjs(sd.expectedDate) : null,
+    contractorId: sd.contractorId,
+    siteId: sd.siteId,
     totalSum: sd.totalSum,
     items: sd.items.map(itemToEdit),
   };
@@ -166,6 +174,9 @@ export function SourceDocumentDetailModal({
     const body: Record<string, unknown> = {
       docNumber: edit.docNumber,
       docDate: edit.docDate ? edit.docDate.format('YYYY-MM-DD') : null,
+      expectedDate: edit.expectedDate ? edit.expectedDate.format('YYYY-MM-DD') : null,
+      contractorId: edit.contractorId,
+      siteId: edit.siteId,
       totalSum: edit.totalSum,
       items: edit.items.map((it) => ({
         nameRaw: it.nameRaw,
@@ -356,6 +367,26 @@ export function SourceDocumentDetailModal({
                           style={{ width: '100%' }}
                         />
                       </Form.Item>
+                      <Form.Item label="Дата поставки">
+                        <DatePicker
+                          value={edit.expectedDate}
+                          onChange={(d) => setEdit({ ...edit, expectedDate: d })}
+                          format="YYYY-MM-DD"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                      <Form.Item label="Подрядчик">
+                        <ContractorSelect
+                          value={edit.contractorId}
+                          onChange={(v) => setEdit({ ...edit, contractorId: v })}
+                        />
+                      </Form.Item>
+                      <Form.Item label="Объект">
+                        <SiteSelect
+                          value={edit.siteId}
+                          onChange={(v) => setEdit({ ...edit, siteId: v })}
+                        />
+                      </Form.Item>
                     </Form>
                   ) : (
                     <ReadOnlyHeader sd={sd} />
@@ -442,6 +473,15 @@ function ReadOnlyHeader({ sd }: { sd: SourceDocumentDetail }) {
         <b>Сумма:</b> {formatDecimal(sd.totalSum) || '—'}
       </Typography.Text>
       <Typography.Text type="secondary">НДС: {formatDecimal(sd.vatSum) || '—'}</Typography.Text>
+      <Typography.Text>
+        <b>Дата поставки:</b> {sd.expectedDate ?? '—'}
+      </Typography.Text>
+      <Typography.Text>
+        <b>Подрядчик:</b> {sd.contractorName ?? '—'}
+      </Typography.Text>
+      <Typography.Text>
+        <b>Объект:</b> {sd.siteName ?? '—'}
+      </Typography.Text>
     </Space>
   );
 }

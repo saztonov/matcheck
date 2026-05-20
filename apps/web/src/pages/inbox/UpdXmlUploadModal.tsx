@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Alert, Button, Modal, Space, Spin, Typography, Upload, message } from 'antd';
+import { Alert, Button, DatePicker, Modal, Space, Spin, Typography, Upload, message } from 'antd';
 import type { UploadProps } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
+import type { Dayjs } from 'dayjs';
 import type { SourceDirection, UpdDuplicateExisting } from '@matcheck/contracts';
 import { api, ApiError } from '../../services/api';
 import { ContractorSelect } from './ContractorSelect';
@@ -29,6 +30,7 @@ export function UpdXmlUploadModal({
   const qc = useQueryClient();
   const [contractorId, setContractorId] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
+  const [expectedDate, setExpectedDate] = useState<Dayjs | null>(null);
   const [stage, setStage] = useState<Stage>('select');
   const [pendingXml, setPendingXml] = useState<string | null>(null);
   const [conflict, setConflict] = useState<UpdDuplicateExisting | null>(null);
@@ -37,6 +39,7 @@ export function UpdXmlUploadModal({
   function reset() {
     setContractorId(null);
     setSiteId(null);
+    setExpectedDate(null);
     setStage('select');
     setPendingXml(null);
     setConflict(null);
@@ -61,6 +64,7 @@ export function UpdXmlUploadModal({
         direction,
         contractorId,
         siteId,
+        expectedDate: expectedDate ? expectedDate.format('YYYY-MM-DD') : null,
         ...(replaceExistingId ? { replaceExistingId } : {}),
       });
       message.success(replaceExistingId ? 'УПД заменён' : 'УПД загружен');
@@ -149,6 +153,19 @@ export function UpdXmlUploadModal({
                 value={siteId}
                 onChange={setSiteId}
                 disabled={stage === 'uploading'}
+              />
+            </div>
+          </div>
+          <div>
+            <Typography.Text strong>Дата поставки</Typography.Text>{' '}
+            <Typography.Text type="secondary">(необязательно)</Typography.Text>
+            <div style={{ marginTop: 4 }}>
+              <DatePicker
+                value={expectedDate}
+                onChange={setExpectedDate}
+                format="YYYY-MM-DD"
+                disabled={stage === 'uploading'}
+                style={{ width: '100%' }}
               />
             </div>
           </div>

@@ -144,6 +144,14 @@ export const ManualUpdUploadRequestSchema = z.object({
   direction: SourceDirectionSchema,
   contractorId: z.string().uuid(),
   siteId: z.string().uuid(),
+  // Опциональная дата фактической поставки товара. Сохраняется в
+  // source_documents.expected_date — поле уже существует в схеме
+  // (используется для заявок-request). Формат: YYYY-MM-DD.
+  expectedDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .nullable()
+    .optional(),
   // Если указан — подтверждение «Заменить» существующий УПД с этим id.
   // Сервер удалит старый и создаст новый.
   replaceExistingId: z.string().uuid().optional(),
@@ -264,6 +272,13 @@ export const UpdPdfQueueRequestSchema = z.object({
   direction: SourceDirectionSchema,
   contractorId: z.string().uuid(),
   siteId: z.string().uuid(),
+  // Опциональная дата фактической поставки. Multipart всегда приходит
+  // строкой, поэтому пустую строку приводим к null.
+  expectedDate: z
+    .union([z.literal(''), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)])
+    .transform((v) => (v === '' ? null : v))
+    .nullable()
+    .optional(),
 });
 export type UpdPdfQueueRequest = z.infer<typeof UpdPdfQueueRequestSchema>;
 
