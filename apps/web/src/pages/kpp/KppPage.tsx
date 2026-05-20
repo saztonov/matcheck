@@ -115,6 +115,11 @@ export default function KppPage() {
   const deliveryId = params.get('delivery');
   const fromAccepted = params.get('from') === 'accepted';
   const tab: ListTab = params.get('tab') === 'accepted' ? 'accepted' : 'expected';
+  // Режим «новой несохранённой формы»: запись в IDB/БД ещё не создана.
+  // UUID лежит в deliveryId, а флаг new=1 отключает deliveryQuery и активирует
+  // ветку creation в save-mutation (первый «Сохранить» создаёт документ filled).
+  const isNew = params.get('new') === '1';
+  const updIdFromUrl = params.get('upd');
 
   // Для inspector_kpp объект фиксирован значением из БД; селект блокируется,
   // а сервер всё равно перепишет siteId в запросе на сохранение.
@@ -133,7 +138,6 @@ export default function KppPage() {
   const [contractorId, setContractorId] = useState<string | null>(null);
   const [recipientMolId, setRecipientMolId] = useState<string | null>(null);
   const [selectedUpd, setSelectedUpd] = useState<SourceDocument | null>(null);
-  const [creating, setCreating] = useState(false);
 
   // ID приёмки, для которой уже выполнили первичную гидратацию формы из server data.
   // Защищает локальные правки (plate/comment/items) от затирания при рефетче
@@ -196,13 +200,73 @@ export default function KppPage() {
         throw err;
       }
     },
-    enabled: !!deliveryId,
+    // В режиме isNew записи на сервере и в IDB ещё нет — запрос дал бы 404
+    // и завис бы в isLoading. Форма работает только с локальным state.
+    enabled: !!deliveryId && !isNew,
+  });
+
+  // Детали УПД для преднаполнения формы в режиме isNew. Сначала пробуем IndexedDB
+  // (его наполняет pullSync), при пустом кеше — серверный fallback. Грузится один
+  // раз на updIdFromUrl, после чего гидратация заполняет items/contractor/site.
+  const newFromUpdQuery = useQuery({
+    queryKey: ['source-document-detail', updIdFromUrl],
+    queryFn: async (): Promise<SourceDocumentDetail> => {
+      if (!updIdFromUrl) throw new Error('no upd id');
+      const dbi = await db();
+      const cached = await dbi.get('source_documents', updIdFromUrl);
+      if (cached) return cached;
+      return await api.get<SourceDocumentDetail>(`/source-documents/${updIdFromUrl}`);
+    },
+    enabled: isNew && !!updIdFromUrl,
   });
 
   // Производное значение: react-query — единственный источник истины для
   // загруженной приёмки. Использование useState + setLoadedDelivery в useEffect
   // приводило к гонке рендера (data уже есть, isLoading=false, но state ещё null).
-  const loadedDelivery: Delivery | null = deliveryQuery.data ?? null;
+  // В режиме isNew серверной записи ещё нет — собираем «виртуальный» Delivery
+  // из дефолтов, чтобы существующий JSX (status, photos, version и т. д.) работал
+  // без переписки. Фактические items/plate/comment живут в локальном state формы.
+  const virtualDelivery: Delivery | null = useMemo(() => {
+    if (!isNew || !deliveryId) return null;
+    return {
+      id: deliveryId,
+      status: {
+        id: '',
+        entityType: 'delivery',
+        code: 'not_filled',
+        label: 'Не оформлена',
+        color: null,
+        sortOrder: 0,
+      },
+      siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
+      supplierId: null,
+      contractorId: null,
+      recipientMolId: null,
+      vehiclePlate: null,
+      driverName: null,
+      arrivedAt: null,
+      inspectorId: authUser?.id ?? null,
+      comment: null,
+      confirmedByMolUserId: null,
+      confirmedByMolUserEmail: null,
+      confirmedByMolAt: null,
+      pendingDeletionAt: null,
+      pendingDeletionByUserId: null,
+      pendingDeletionByUserEmail: null,
+      pendingDeletionReason: null,
+      version: 0,
+      sourceDocumentIds: updIdFromUrl ? [updIdFromUrl] : [],
+      sourceShipmentId: null,
+      sourceShipmentShippedAt: null,
+      sourceShipmentSiteId: null,
+      sourceShipmentSiteCode: null,
+      items: [],
+      photos: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }, [isNew, deliveryId, inspectorSiteId, updIdFromUrl, authUser?.id]);
+  const loadedDelivery: Delivery | null = virtualDelivery ?? deliveryQuery.data ?? null;
 
   // Локальные IDB-записи фото для приёмки. Параллельно с серверным delivery.photos:
   // свежеснятое фото появляется в IDB немедленно (через capturePhoto), а в delivery.photos —
@@ -288,105 +352,68 @@ export default function KppPage() {
     }
   }, [deliveryQuery.data, selectedUpd, isInspector, inspectorSiteId]);
 
+  // Гидратация формы в режиме isNew по выбранному УПД. items/contractorId/siteId
+  // подставляются из SourceDocumentDetail один раз — далее редактирование идёт
+  // через локальный state. hydratedIdRef защищает от повторного затирания
+  // пользовательских правок при рефетче (тот же приём, что и для серверного d).
+  useEffect(() => {
+    if (!isNew || !deliveryId) return;
+    const detail = newFromUpdQuery.data;
+    if (!detail) return;
+    if (hydratedIdRef.current === deliveryId) return;
+    hydratedIdRef.current = deliveryId;
+    setSelectedUpd(detail);
+    if (!isInspector) {
+      setSiteId((prev) => prev ?? (detail.siteId === SYSTEM_SITE_ID ? null : detail.siteId));
+    }
+    setContractorId((prev) => prev ?? detail.contractorId ?? null);
+    setItems(
+      detail.items.map((it, idx) => ({
+        clientKey: newKey(),
+        lineNo: idx + 1,
+        nameRaw: it.nameRaw,
+        qtyPlanned: it.qty,
+        qtyActual: it.qty,
+        unit: it.unit,
+        materialId: it.materialId ?? null,
+        itemKind: 'material' as const,
+        assetId: null,
+        inventoryNumber: null,
+        serialNumber: null,
+        volumeM3: it.volumeM3 ?? null,
+        massKg: it.massKg ?? null,
+        volumeConfidence: it.volumeConfidence ?? null,
+        groupName: it.groupName ?? null,
+      })),
+    );
+  }, [isNew, deliveryId, newFromUpdQuery.data, isInspector]);
+
   /**
-   * Создаёт пустую приёмку. UUID генерируется на клиенте, запись сразу появляется
-   * в IndexedDB, а мутация уезжает на сервер через runSync (best-effort, может догнаться позже).
+   * Открывает форму новой пустой приёмки. UUID генерируется клиентом и кладётся в URL
+   * под флагом new=1. Запись в IndexedDB и на сервере появится только при первом
+   * нажатии «Сохранить» — до этого момента форма существует только как React state.
    */
-  const createBlank = async () => {
-    if (creating) return;
+  const createBlank = () => {
     if (inspectorWithoutSite) {
       message.error('Объект не назначен — обратитесь к администратору');
       return;
     }
-    setCreating(true);
-    try {
-      const id = crypto.randomUUID();
-      // siteId — обязателен на сервере. Для inspector_kpp сразу подставляем
-      // назначенный объект (сервер всё равно перезапишет). Для остальных —
-      // системный «Без объекта» как заглушку, чтобы черновик мог уехать
-      // на сервер (status='not_filled') и не зависал в pending-mutations.
-      const initialSiteId = inspectorSiteId ?? SYSTEM_SITE_ID;
-      await applyLocalEdit(id, { siteId: initialSiteId });
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'delivery_upsert',
-        entityId: id,
-        baseVersion: 0,
-        payload: null,
-      });
-      void runSync();
-      navigate(`/kpp?delivery=${id}`);
-    } catch (err) {
-      message.error(`Не удалось создать приёмку: ${(err as Error).message}`);
-    } finally {
-      setCreating(false);
-    }
+    const id = crypto.randomUUID();
+    navigate(`/kpp?delivery=${id}&new=1`);
   };
 
   /**
-   * Создаёт приёмку по выбранному УПД. Детали УПД читаются из локального кеша (его наполняет
-   * pullSync); при offline и пустом кеше — ошибка. UUID клиентский, мутация уезжает асинхронно.
+   * Открывает форму новой приёмки, преднаполненной из выбранного УПД. Детали УПД
+   * (items, supplierId, contractorId) подгружаются уже внутри формы по флагу new=1
+   * и updIdFromUrl. Черновик в IDB/БД до явного «Сохранить» не создаётся.
    */
-  const createFromUpd = async (upd: SourceDocument) => {
-    if (creating) return;
+  const createFromUpd = (upd: SourceDocument) => {
     if (inspectorWithoutSite) {
       message.error('Объект не назначен — обратитесь к администратору');
       return;
     }
-    setCreating(true);
-    try {
-      const dbi = await db();
-      let detail = await dbi.get('source_documents', upd.id);
-      if (!detail) {
-        try {
-          detail = await api.get<SourceDocumentDetail>(`/source-documents/${upd.id}`);
-        } catch {
-          message.error('Нет связи и детали УПД ещё не загружены — попробуйте позже');
-          return;
-        }
-      }
-      const id = crypto.randomUUID();
-      // Для inspector_kpp siteId — назначенный объект инспектора (сервер всё равно
-      // перепишет). Для admin/manager — siteId из УПД, если он там есть.
-      const patch: Partial<Delivery> = {
-        siteId: inspectorSiteId ?? detail.siteId ?? SYSTEM_SITE_ID,
-        supplierId: detail.supplierId ?? null,
-        contractorId: detail.contractorId ?? null,
-        sourceDocumentIds: [upd.id],
-        items: detail.items.map((it, i) => ({
-          id: crypto.randomUUID(),
-          itemKind: 'material' as const,
-          materialId: it.materialId ?? null,
-          assetId: null,
-          inventoryNumber: null,
-          serialNumber: null,
-          nameRaw: it.nameRaw,
-          qtyPlanned: it.qty,
-          qtyActual: it.qty,
-          unit: it.unit,
-          comment: null,
-          lineNo: i + 1,
-          volumeM3: it.volumeM3 ?? null,
-          massKg: it.massKg ?? null,
-          volumeConfidence: it.volumeConfidence ?? null,
-          groupName: it.groupName ?? null,
-        })),
-      };
-      await applyLocalEdit(id, patch);
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'delivery_upsert',
-        entityId: id,
-        baseVersion: 0,
-        payload: null,
-      });
-      void runSync();
-      navigate(`/kpp?delivery=${id}`);
-    } catch (err) {
-      message.error(`Не удалось открыть УПД: ${(err as Error).message}`);
-    } finally {
-      setCreating(false);
-    }
+    const id = crypto.randomUUID();
+    navigate(`/kpp?delivery=${id}&new=1&upd=${upd.id}`);
   };
 
   const photoProps: UploadProps = {
@@ -723,7 +750,7 @@ export default function KppPage() {
             />
           )}
           <Typography.Title level={3} style={{ margin: 0 }}>
-            Приёмка
+            {isNew ? 'Новая приёмка' : 'Приёмка'}
           </Typography.Title>
           {isPending && loadedDelivery && (
             <PendingDeletionTag
@@ -1024,12 +1051,16 @@ export default function KppPage() {
 
         {(() => {
           const isConfirmed = loadedDelivery.status.code === 'confirmed_mol';
-          const confirmTooltip = isConfirmed
-            ? `Подтверждено: ${loadedDelivery.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedDelivery.confirmedByMolAt)}`
-            : (verifyReason ?? 'Подтвердить документ как МОЛ');
+          const confirmTooltip = isNew
+            ? 'Сначала сохраните приёмку, затем можно подтверждать МОЛ'
+            : isConfirmed
+              ? `Подтверждено: ${loadedDelivery.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedDelivery.confirmedByMolAt)}`
+              : (verifyReason ?? 'Подтвердить документ как МОЛ');
           // Помеченный документ — read-only: блокируем Save и Подтвердить МОЛ.
           const saveDisabled = !!verifyReason || isPending;
-          const confirmDisabled = isConfirmed || !!verifyReason || isPending;
+          // В режиме isNew подтверждение МОЛ недоступно — сначала должна
+          // появиться сохранённая запись со статусом filled.
+          const confirmDisabled = isNew || isConfirmed || !!verifyReason || isPending;
           // Кнопка «Пометить на удаление» доступна для filled/confirmed_mol в активном режиме.
           const canMarkDeletion =
             !isPending &&
@@ -1182,7 +1213,6 @@ export default function KppPage() {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            loading={creating}
             onClick={createBlank}
             disabled={inspectorWithoutSite}
           >

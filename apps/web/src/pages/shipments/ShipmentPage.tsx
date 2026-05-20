@@ -119,6 +119,11 @@ export default function ShipmentPage() {
   // Дефолт — 'accepted' (не ломаем привычку: страница и раньше открывалась
   // на истории отгрузок). Вкладка 'expected' появляется только при явном tab=expected.
   const tab: ListTab = params.get('tab') === 'expected' ? 'expected' : 'accepted';
+  // Режим «новой несохранённой формы»: запись в IDB/БД ещё не создана.
+  // UUID лежит в shipmentId, флаг new=1 отключает shipmentQuery и активирует
+  // ветку creation в save-mutation (первый «Сохранить» создаёт документ shipped).
+  const isNew = params.get('new') === '1';
+  const updIdFromUrl = params.get('upd');
 
   // Для inspector_kpp объект-источник фиксирован значением из БД (selectбыл бы
   // disabled, а сервер всё равно перепишет siteId на user.siteId).
@@ -139,8 +144,6 @@ export default function ShipmentPage() {
   const [plate, setPlate] = useState('');
   const [driverName, setDriverName] = useState('');
   const [comment, setComment] = useState('');
-  const [loadedShipment, setLoadedShipment] = useState<Shipment | null>(null);
-  const [creating, setCreating] = useState(false);
 
   // ID отгрузки, для которой уже выполнили первичную гидратацию формы из server data.
   // Защищает локальные правки (plate/driverName/comment/items) от затирания при рефетче
@@ -158,7 +161,6 @@ export default function ShipmentPage() {
       setPlate('');
       setDriverName('');
       setComment('');
-      setLoadedShipment(null);
       hydratedIdRef.current = null;
     }
   }, [shipmentId, inspectorSiteId]);
@@ -202,7 +204,23 @@ export default function ShipmentPage() {
         throw err;
       }
     },
-    enabled: !!shipmentId,
+    // В режиме isNew записи на сервере и в IDB ещё нет — запрос дал бы 404
+    // и завис бы в isLoading. Форма работает только с локальным state.
+    enabled: !!shipmentId && !isNew,
+  });
+
+  // Детали УПД для преднаполнения формы в режиме isNew. Сначала IndexedDB
+  // (наполняется pullSync), при пустом кеше — серверный fallback.
+  const newFromUpdQuery = useQuery({
+    queryKey: ['source-document-detail', updIdFromUrl],
+    queryFn: async (): Promise<SourceDocumentDetail> => {
+      if (!updIdFromUrl) throw new Error('no upd id');
+      const dbi = await db();
+      const cached = await dbi.get('source_documents', updIdFromUrl);
+      if (cached) return cached;
+      return await api.get<SourceDocumentDetail>(`/source-documents/${updIdFromUrl}`);
+    },
+    enabled: isNew && !!updIdFromUrl,
   });
 
   // Локальные IDB-записи фото — параллельный источник к loadedShipment.photos.
@@ -233,7 +251,6 @@ export default function ShipmentPage() {
   useEffect(() => {
     const s = shipmentQuery.data;
     if (!s) return;
-    setLoadedShipment(s);
     if (hydratedIdRef.current !== s.id) {
       hydratedIdRef.current = s.id;
       setKind(s.kind);
@@ -272,98 +289,106 @@ export default function ShipmentPage() {
     }
   }, [shipmentQuery.data, isInspector, inspectorSiteId]);
 
-  const createBlank = async () => {
-    if (creating) return;
+  // В режиме isNew серверной записи ещё нет — собираем «виртуальный» Shipment
+  // из дефолтов, чтобы существующий JSX (status, photos, version и т. д.) работал
+  // без переписки. Фактические items/receiver/comment живут в локальном state формы.
+  const virtualShipment: Shipment | null = useMemo(() => {
+    if (!isNew || !shipmentId) return null;
+    return {
+      id: shipmentId,
+      status: {
+        id: '',
+        entityType: 'shipment',
+        code: 'not_filled',
+        label: 'Не оформлена',
+        color: null,
+        sortOrder: 0,
+      },
+      kind: 'contractor',
+      siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
+      receiverCounterpartyId: null,
+      receiverMolId: null,
+      destSiteId: null,
+      vehiclePlate: null,
+      driverName: null,
+      shippedAt: null,
+      inspectorId: authUser?.id ?? null,
+      comment: null,
+      confirmedByMolUserId: null,
+      confirmedByMolUserEmail: null,
+      confirmedByMolAt: null,
+      pendingDeletionAt: null,
+      pendingDeletionByUserId: null,
+      pendingDeletionByUserEmail: null,
+      pendingDeletionReason: null,
+      version: 0,
+      sourceDocumentIds: updIdFromUrl ? [updIdFromUrl] : [],
+      items: [],
+      photos: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }, [isNew, shipmentId, inspectorSiteId, updIdFromUrl, authUser?.id]);
+
+  // Гидратация формы в режиме isNew по выбранному УПД. items/receiverId/siteId
+  // подставляются из SourceDocumentDetail один раз — далее редактирование идёт
+  // через локальный state. hydratedIdRef защищает от повторного затирания.
+  useEffect(() => {
+    if (!isNew || !shipmentId) return;
+    const detail = newFromUpdQuery.data;
+    if (!detail) return;
+    if (hydratedIdRef.current === shipmentId) return;
+    hydratedIdRef.current = shipmentId;
+    setKind('contractor');
+    if (!isInspector) {
+      setSiteId((prev) => prev ?? (detail.siteId === SYSTEM_SITE_ID ? null : detail.siteId));
+    }
+    setReceiverKind('counterparty');
+    setReceiverId((prev) => prev ?? detail.contractorId ?? null);
+    setItems(
+      detail.items.map((it, idx) => ({
+        clientKey: newKey(),
+        lineNo: idx + 1,
+        nameRaw: it.nameRaw,
+        qtyActual: it.qty,
+        unit: it.unit,
+        materialId: it.materialId ?? null,
+        itemKind: 'material' as const,
+        assetId: null,
+        inventoryNumber: null,
+        serialNumber: null,
+      })),
+    );
+  }, [isNew, shipmentId, newFromUpdQuery.data, isInspector]);
+
+  const loadedShipment: Shipment | null = virtualShipment ?? shipmentQuery.data ?? null;
+
+  /**
+   * Открывает форму новой пустой отгрузки. UUID кладётся в URL под флагом new=1.
+   * Запись в IndexedDB и на сервере появится только при первом нажатии «Сохранить» —
+   * до этого момента форма существует только как React state.
+   */
+  const createBlank = () => {
     if (inspectorWithoutSite) {
       message.error('Объект не назначен — обратитесь к администратору');
       return;
     }
-    setCreating(true);
-    try {
-      const id = crypto.randomUUID();
-      await applyLocalEdit(id, {
-        kind: 'contractor',
-        siteId: inspectorSiteId ?? SYSTEM_SITE_ID,
-      });
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'shipment_upsert',
-        entityId: id,
-        baseVersion: 0,
-        payload: null,
-      });
-      void runSync();
-      navigate(`/shipments?shipment=${id}`);
-    } catch (err) {
-      message.error(`Не удалось создать отгрузку: ${(err as Error).message}`);
-    } finally {
-      setCreating(false);
-    }
+    const id = crypto.randomUUID();
+    navigate(`/shipments?shipment=${id}&new=1`);
   };
 
   /**
-   * Создаёт отгрузку по выбранному исходящему УПД. Аналог createFromUpd
-   * в KppPage, но строит Shipment: kind='contractor', получатель — contractorId
-   * из УПД (для outbound-документа это и есть получатель груза).
+   * Открывает форму новой отгрузки, преднаполненной из выбранного исходящего УПД.
+   * Детали УПД (items, receiverCounterpartyId) подгружаются уже внутри формы по
+   * флагу new=1 и updIdFromUrl. Черновик в IDB/БД до явного «Сохранить» не создаётся.
    */
-  const createFromUpd = async (upd: SourceDocument) => {
-    if (creating) return;
+  const createFromUpd = (upd: SourceDocument) => {
     if (inspectorWithoutSite) {
       message.error('Объект не назначен — обратитесь к администратору');
       return;
     }
-    setCreating(true);
-    try {
-      const dbi = await db();
-      let detail = await dbi.get('source_documents', upd.id);
-      if (!detail) {
-        try {
-          detail = await api.get<SourceDocumentDetail>(`/source-documents/${upd.id}`);
-        } catch {
-          message.error('Нет связи и детали УПД ещё не загружены — попробуйте позже');
-          return;
-        }
-      }
-      const id = crypto.randomUUID();
-      const patch: Partial<Shipment> = {
-        kind: 'contractor',
-        siteId: inspectorSiteId ?? detail.siteId ?? SYSTEM_SITE_ID,
-        receiverCounterpartyId: detail.contractorId ?? null,
-        sourceDocumentIds: [upd.id],
-        items: detail.items.map((it, i) => ({
-          id: crypto.randomUUID(),
-          itemKind: 'material' as const,
-          materialId: it.materialId ?? null,
-          assetId: null,
-          inventoryNumber: null,
-          serialNumber: null,
-          nameRaw: it.nameRaw,
-          qtyPlanned: it.qty,
-          qtyActual: it.qty,
-          unit: it.unit,
-          comment: null,
-          lineNo: i + 1,
-          volumeM3: it.volumeM3 ?? null,
-          massKg: it.massKg ?? null,
-          volumeConfidence: it.volumeConfidence ?? null,
-          groupName: it.groupName ?? null,
-        })),
-      };
-      await applyLocalEdit(id, patch);
-      await enqueueMutation({
-        id: crypto.randomUUID(),
-        kind: 'shipment_upsert',
-        entityId: id,
-        baseVersion: 0,
-        payload: null,
-      });
-      void runSync();
-      navigate(`/shipments?shipment=${id}&from=list`);
-    } catch (err) {
-      message.error(`Не удалось открыть УПД: ${(err as Error).message}`);
-    } finally {
-      setCreating(false);
-    }
+    const id = crypto.randomUUID();
+    navigate(`/shipments?shipment=${id}&new=1&upd=${upd.id}&from=list`);
   };
 
   const photoProps: UploadProps = {
@@ -743,7 +768,7 @@ export default function ShipmentPage() {
             />
           )}
           <Typography.Title level={3} style={{ margin: 0 }}>
-            Отгрузка
+            {isNew ? 'Новая отгрузка' : 'Отгрузка'}
           </Typography.Title>
           {isPending && loadedShipment && (
             <PendingDeletionTag
@@ -1039,12 +1064,16 @@ export default function ShipmentPage() {
 
         {(() => {
           const isConfirmed = loadedShipment.status.code === 'confirmed_mol';
-          const confirmTooltip = isConfirmed
-            ? `Подтверждено: ${loadedShipment.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedShipment.confirmedByMolAt)}`
-            : (verifyReason ?? 'Подтвердить документ как МОЛ');
+          const confirmTooltip = isNew
+            ? 'Сначала сохраните отгрузку, затем можно подтверждать МОЛ'
+            : isConfirmed
+              ? `Подтверждено: ${loadedShipment.confirmedByMolUserEmail ?? '—'}, ${formatMolDate(loadedShipment.confirmedByMolAt)}`
+              : (verifyReason ?? 'Подтвердить документ как МОЛ');
           // Помеченный документ — read-only: блокируем Save и Подтвердить МОЛ.
           const saveDisabled = !!verifyReason || isPending;
-          const confirmDisabled = isConfirmed || !!verifyReason || isPending;
+          // В режиме isNew подтверждение МОЛ недоступно — сначала должна
+          // появиться сохранённая запись со статусом shipped.
+          const confirmDisabled = isNew || isConfirmed || !!verifyReason || isPending;
           const canMarkDeletion =
             !isPending &&
             (loadedShipment.status.code === 'shipped' ||
@@ -1194,7 +1223,6 @@ export default function ShipmentPage() {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            loading={creating}
             onClick={createBlank}
             disabled={inspectorWithoutSite}
           >
