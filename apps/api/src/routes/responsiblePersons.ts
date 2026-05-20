@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { and, eq, ilike, sql as drSql } from 'drizzle-orm';
 import { z } from 'zod';
+import ExcelJS from 'exceljs';
 import { asZod } from '../lib/fastify.js';
 import {
+  ResponsiblePersonImportResponseSchema,
   ResponsiblePersonListResponseSchema,
   ResponsiblePersonSchema,
   ResponsiblePersonUpsertSchema,
@@ -74,6 +76,148 @@ export async function responsiblePersonRoutes(rawApp: FastifyInstance): Promise<
       if (!created) throw new Error('insert failed');
       reply.code(201);
       return row(created);
+    },
+  );
+
+  // Массовый импорт МОЛ из .xlsx. Колонки: ФИО (обязательная), Должность,
+  // Телефон. Заголовки в первой строке, регистр и язык не важны. Дубликаты
+  // по нормализованному ФИО (lower+trim) пропускаются — и относительно БД,
+  // и внутри файла. Битые строки попадают в errors с номером строки Excel,
+  // остальные вставляются одной транзакцией.
+  app.post(
+    '/api/v1/responsible-persons/import',
+    {
+      preHandler: [app.authenticate, app.authorize('admin', 'manager')],
+    },
+    async (req, reply) => {
+      const mp = req as unknown as {
+        file: () => Promise<
+          | {
+              filename: string;
+              mimetype: string;
+              toBuffer: () => Promise<Buffer>;
+            }
+          | undefined
+        >;
+      };
+      const fileData = await mp.file();
+      if (!fileData) {
+        return reply.code(400).send({ error: 'no_file', message: 'Файл не приложен' });
+      }
+      const lower = fileData.filename.toLowerCase();
+      const isXlsx =
+        fileData.mimetype.includes('spreadsheetml') ||
+        fileData.mimetype.includes('excel') ||
+        lower.endsWith('.xlsx') ||
+        lower.endsWith('.xls');
+      if (!isXlsx) {
+        return reply.code(400).send({ error: 'bad_mime', message: 'Ожидается .xlsx файл' });
+      }
+
+      const buffer = await fileData.toBuffer();
+      if (buffer.length === 0) {
+        return reply.code(400).send({ error: 'empty_file', message: 'Файл пустой' });
+      }
+
+      const wb = new ExcelJS.Workbook();
+      try {
+        await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+      } catch (err) {
+        req.log.warn({ err }, 'responsible-persons import: xlsx parse failed');
+        return reply.code(400).send({ error: 'bad_xlsx', message: 'Не удалось прочитать xlsx' });
+      }
+
+      const ws = wb.worksheets[0];
+      if (!ws) {
+        return reply.code(400).send({ error: 'no_sheet', message: 'В файле нет листов' });
+      }
+
+      const headerRow = ws.getRow(1);
+      const aliases: Record<string, 'fullName' | 'position' | 'phone'> = {
+        фио: 'fullName',
+        fio: 'fullName',
+        fullname: 'fullName',
+        'ф.и.о.': 'fullName',
+        'ф.и.о': 'fullName',
+        должность: 'position',
+        position: 'position',
+        телефон: 'phone',
+        phone: 'phone',
+        тел: 'phone',
+      };
+      const colIdx: Partial<Record<'fullName' | 'position' | 'phone', number>> = {};
+      headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const key = String(cell.text ?? '').trim().toLowerCase();
+        const field = aliases[key];
+        if (field && colIdx[field] == null) colIdx[field] = colNumber;
+      });
+      if (colIdx.fullName == null) {
+        return reply.code(400).send({
+          error: 'fio_column_not_found',
+          message: 'Не найдена колонка ФИО в первой строке',
+        });
+      }
+
+      const existing = await app.db
+        .select({ fullName: responsiblePersons.fullName })
+        .from(responsiblePersons);
+      const seen = new Set<string>(existing.map((r) => r.fullName.trim().toLowerCase()));
+
+      const toInsert: { fullName: string; position: string | null; phone: string | null }[] = [];
+      const errors: { row: number; reason: string }[] = [];
+      let skippedDuplicates = 0;
+
+      const lastRow = ws.actualRowCount;
+      for (let r = 2; r <= lastRow; r += 1) {
+        const excelRow = ws.getRow(r);
+        const readCell = (idx: number | undefined): string | undefined => {
+          if (idx == null) return undefined;
+          const t = String(excelRow.getCell(idx).text ?? '').trim();
+          return t.length === 0 ? undefined : t;
+        };
+        const fullName = readCell(colIdx.fullName);
+        const position = readCell(colIdx.position);
+        const phone = readCell(colIdx.phone);
+
+        // Полностью пустая строка — пропускаем молча, без записи в errors.
+        if (fullName == null && position == null && phone == null) continue;
+
+        const parsed = ResponsiblePersonUpsertSchema.safeParse({ fullName, position, phone });
+        if (!parsed.success) {
+          errors.push({
+            row: r,
+            reason: parsed.error.issues
+              .map((i) => `${i.path.join('.') || 'строка'}: ${i.message}`)
+              .join('; '),
+          });
+          continue;
+        }
+
+        const key = parsed.data.fullName.trim().toLowerCase();
+        if (seen.has(key)) {
+          skippedDuplicates += 1;
+          continue;
+        }
+        seen.add(key);
+        toInsert.push({
+          fullName: parsed.data.fullName,
+          position: parsed.data.position ?? null,
+          phone: parsed.data.phone ?? null,
+        });
+      }
+
+      if (toInsert.length > 0) {
+        await app.db.transaction(async (tx) => {
+          await tx.insert(responsiblePersons).values(toInsert);
+        });
+      }
+
+      const body = {
+        created: toInsert.length,
+        skippedDuplicates,
+        errors,
+      };
+      return ResponsiblePersonImportResponseSchema.parse(body);
     },
   );
 

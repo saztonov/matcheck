@@ -23,3 +23,16 @@ export const ResponsiblePersonListResponseSchema = z.object({
   items: z.array(ResponsiblePersonSchema),
   total: z.number(),
 });
+
+export const ResponsiblePersonImportErrorSchema = z.object({
+  row: z.number().int().positive(),
+  reason: z.string(),
+});
+export type ResponsiblePersonImportError = z.infer<typeof ResponsiblePersonImportErrorSchema>;
+
+export const ResponsiblePersonImportResponseSchema = z.object({
+  created: z.number().int().nonnegative(),
+  skippedDuplicates: z.number().int().nonnegative(),
+  errors: z.array(ResponsiblePersonImportErrorSchema),
+});
+export type ResponsiblePersonImportResponse = z.infer<typeof ResponsiblePersonImportResponseSchema>;

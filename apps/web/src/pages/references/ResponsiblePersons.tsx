@@ -1,19 +1,28 @@
 import { useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Drawer,
   Form,
   Input,
+  List,
+  Modal,
   Space,
   Switch,
   Tag,
   Typography,
+  Upload,
   message,
 } from 'antd';
+import { InboxOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ResponsiblePerson, ResponsiblePersonUpsert } from '@matcheck/contracts';
-import { api } from '../../services/api';
+import type {
+  ResponsiblePerson,
+  ResponsiblePersonImportResponse,
+  ResponsiblePersonUpsert,
+} from '@matcheck/contracts';
+import { api, apiUploadFile, ApiError } from '../../services/api';
 import { ResponsiveTable } from '../../shared/ui/ResponsiveTable';
 
 type List = { items: ResponsiblePerson[]; total: number };
@@ -22,6 +31,7 @@ export default function ResponsiblePersonsPage() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
   const [form] = Form.useForm<ResponsiblePersonUpsert>();
 
   const list = useQuery({
@@ -49,6 +59,7 @@ export default function ResponsiblePersonsPage() {
         </Typography.Title>
         <Space>
           <Input.Search placeholder="ФИО" allowClear onSearch={setSearch} />
+          <Button onClick={() => setImportOpen(true)}>Импорт из Excel</Button>
           <Button type="primary" onClick={() => setOpen(true)}>
             Добавить
           </Button>
@@ -116,6 +127,130 @@ export default function ResponsiblePersonsPage() {
           </Button>
         </Form>
       </Drawer>
+      <ImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          void qc.invalidateQueries({ queryKey: ['responsible-persons'] });
+        }}
+      />
     </div>
+  );
+}
+
+function ImportModal({
+  open,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<ResponsiblePersonImportResponse | null>(null);
+
+  function close() {
+    if (uploading) return;
+    setResult(null);
+    onClose();
+  }
+
+  async function upload(file: File) {
+    setUploading(true);
+    try {
+      const res = await apiUploadFile<ResponsiblePersonImportResponse>(
+        '/responsible-persons/import',
+        file,
+      );
+      setResult(res);
+      onImported();
+      if (res.created > 0) {
+        message.success(`Импортировано: ${res.created}`);
+      } else if (res.errors.length === 0 && res.skippedDuplicates > 0) {
+        message.info('Все строки уже есть в справочнике');
+      }
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? err.message || `HTTP ${err.status}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      message.error(msg);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      title="Импорт МОЛ из Excel"
+      onCancel={close}
+      maskClosable={!uploading}
+      closable={!uploading}
+      footer={
+        <Button onClick={close} disabled={uploading}>
+          Закрыть
+        </Button>
+      }
+      width={640}
+    >
+      {!result && (
+        <>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="Колонки: ФИО, Должность, Телефон."
+            description="Заголовки — в первой строке. Обязательное поле — только ФИО. Дубликаты по ФИО пропускаются."
+          />
+          <Upload.Dragger
+            accept=".xlsx,.xls"
+            multiple={false}
+            showUploadList={false}
+            disabled={uploading}
+            beforeUpload={(file) => {
+              void upload(file as unknown as File);
+              return false;
+            }}
+          >
+            <p className="ant-upload-drag-icon">
+              <InboxOutlined />
+            </p>
+            <p className="ant-upload-text">
+              {uploading ? 'Загрузка…' : 'Перетащите .xlsx или нажмите для выбора'}
+            </p>
+            <p className="ant-upload-hint">Лимит — 10 МБ.</p>
+          </Upload.Dragger>
+        </>
+      )}
+      {result && (
+        <>
+          <Alert
+            type={result.errors.length === 0 ? 'success' : 'warning'}
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`Создано: ${result.created} · Пропущено дубликатов: ${result.skippedDuplicates} · Ошибок: ${result.errors.length}`}
+          />
+          {result.errors.length > 0 && (
+            <List
+              size="small"
+              bordered
+              header={<Typography.Text strong>Строки с ошибками</Typography.Text>}
+              dataSource={result.errors}
+              renderItem={(e) => (
+                <List.Item>
+                  <Typography.Text>
+                    Строка {e.row}: <Typography.Text type="danger">{e.reason}</Typography.Text>
+                  </Typography.Text>
+                </List.Item>
+              )}
+            />
+          )}
+        </>
+      )}
+    </Modal>
   );
 }
